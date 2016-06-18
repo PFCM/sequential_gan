@@ -192,11 +192,11 @@ def discriminator_loss(generative_batch, discriminative_batch):
 
 def get_train_step(g_loss, d_loss):
     """Gets (and groups) training ops for the two models"""
-    g_opt = tf.train.RMSPropOptimizer(0.01)
+    g_opt = tf.train.FtrlOptimizer(0.1)
     g_step = g_opt.minimize(
-        g_loss, var_list=tf.get_collection('generator'),
+        -g_loss, var_list=tf.get_collection('generator'),
         gate_gradients=0)
-    d_opt = tf.train.RMSPropOptimizer(0.00001)
+    d_opt = tf.train.GradientDescentOptimizer(0.1)
     d_step = d_opt.minimize(
         d_loss, var_list=tf.get_collection('discriminator'),
         gate_gradients=0)
@@ -207,8 +207,8 @@ if __name__ == '__main__':
     import random
     import progressbar
     # quick test
-    batch_size = 50
-    seq_len = 25
+    batch_size = 10
+    seq_len = 35
     vocab = data.get_default_symbols()
     num_symbols = len(vocab)
     num_epochs = 100000
@@ -217,7 +217,7 @@ if __name__ == '__main__':
 
     # make both nets the same for now
     num_layers = 1
-    layer_width = 256
+    layer_width = 16
 
     # need some random integers
     noise_var = [tf.random_uniform(
@@ -233,12 +233,12 @@ if __name__ == '__main__':
     with tf.variable_scope('Discriminative') as scope:
         # first get the output of the discriminator run on the generator's out
         discriminator_g = discriminative_model(sampled_outs, 1,
-                                               64, [32, 1],
+                                               2, [1],
                                                embedding, None)
         scope.reuse_variables()
         # get the same model, but with the actual data as inputs
         discriminator_d = discriminative_model(real_data, 1,
-                                               64, [32, 1],
+                                               2, [1],
                                                embedding, None)
         # discriminator_g = tf.Print(discriminator_g, [discriminator_g[0, 0],
         #                                              discriminator_d[0, 0]])

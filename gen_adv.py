@@ -7,11 +7,18 @@ On sequences. The challenge is:
                      back it up like a policy gradient
                   b) come up with some continuous letter representation which
                      we can pass through directly.
-
+                  c) make the discriminator predict at each time step, then
+                     just roll straight through
     for now we are going with a).
+    This is kind of not very good though --
+    c would be a lot better (the biggest issue is that policy gradient is
+    very slow, but we could train faster because we probably could resolve
+    the temporal credit assignment).
 """
 import numpy as np
 import tensorflow as tf
+
+import data
 
 
 class new_collection(object):
@@ -185,12 +192,14 @@ def discriminator_loss(generative_batch, discriminative_batch):
 
 def get_train_step(g_loss, d_loss):
     """Gets (and groups) training ops for the two models"""
-    g_opt = tf.train.GradientDescentOptimizer(0.1)
+    g_opt = tf.train.RMSPropOptimizer(0.01)
     g_step = g_opt.minimize(
-        g_loss, var_list=tf.get_collection('generator'))
-    d_opt = tf.train.GradientDescentOptimizer(0.1)
+        g_loss, var_list=tf.get_collection('generator'),
+        gate_gradients=0)
+    d_opt = tf.train.GradientDescentOptimizer(0.01)
     d_step = d_opt.minimize(
-        d_loss, var_list=tf.get_collection('discriminator'))
+        d_loss, var_list=tf.get_collection('discriminator'),
+        gate_gradients=0)
     return tf.group(g_step, d_step)
 
 if __name__ == '__main__':
@@ -199,16 +208,16 @@ if __name__ == '__main__':
     import progressbar
     # quick test
     batch_size = 50
-    seq_len = 5
-    num_symbols = len(string.ascii_lowercase)
+    seq_len = 25
+    vocab = data.get_default_symbols()
+    num_symbols = len(vocab)
+    num_epochs = 10000
 
-    # make some random data, only using some of the vocab
-    real_data = [tf.random_uniform([batch_size], maxval=3, dtype=tf.int32)
-                 for _ in range(seq_len)]
+    real_data = data.get_batch_tensor(batch_size, seq_len, num_epochs)
 
     # make both nets the same for now
     num_layers = 1
-    layer_width = 50
+    layer_width = 100
 
     # need some random integers
     noise_var = [tf.random_uniform(
@@ -223,13 +232,13 @@ if __name__ == '__main__':
 
     with tf.variable_scope('Discriminative') as scope:
         # first get the output of the discriminator run on the generator's out
-        discriminator_g = discriminative_model(sampled_outs, num_layers,
-                                               layer_width//2, [8, 1],
+        discriminator_g = discriminative_model(sampled_outs, 1,
+                                               10, [2, 1],
                                                embedding, None)
         scope.reuse_variables()
         # get the same model, but with the actual data as inputs
-        discriminator_d = discriminative_model(real_data, num_layers,
-                                               layer_width//2, [8, 1],
+        discriminator_d = discriminative_model(real_data, 1,
+                                               10, [2, 1],
                                                embedding, None)
         # discriminator_g = tf.Print(discriminator_g, [discriminator_g[0, 0],
         #                                              discriminator_d[0, 0]])
@@ -241,24 +250,43 @@ if __name__ == '__main__':
                                                 discriminator_d)
         train_step = get_train_step(generator_loss, discriminator_loss)
 
+    # finally we can do stuff
     sess = tf.Session()
     with sess.as_default():
         sess.run(tf.initialize_all_variables())
         widgets = ['(ﾉ◕ヮ◕)ﾉ* ',
+                   progressbar.AnimatedMarker(markers='←↖↑↗→↘↓↙'),
                    progressbar.Bar(marker='-',
                                    left='-',
                                    fill='/'),
                    ' (', progressbar.AdaptiveETA(), ') ']
 
-        bar = progressbar.ProgressBar(widgets=widgets, redirect_stdout=True)
-        for i in bar(range(10000)):
-            outs = sess.run(sampled_outs +
-                            [generator_loss, discriminator_loss, train_step])
-            if (i+1) % 10 == 0:
-                print('{:~<30}'.format(i+1))
-                symbols = [[string.ascii_letters[step[i]]
-                            for step in outs[:-3]]
-                           for i in range(2)]
-                print('\n'.join([' '.join(row) for row in symbols]))
-                print('Generator loss     : {}'.format(outs[-3]))
-                print('Discriminator loss : {}'.format(outs[-2]))
+        bar = progressbar.ProgressBar(widgets=widgets, redirect_stdout=True,
+                                      max_value=num_epochs)
+
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+        try:
+            step = 0
+            bar.start()
+            while (not coord.should_stop()) and (step < num_epochs):
+                outs = sess.run(sampled_outs +
+                                [generator_loss, discriminator_loss,
+                                 train_step])
+                if (step+1) % 50 == 0:
+                    print('{:~<30}'.format(step+1))
+                    symbols = [[vocab[step[i]]
+                                for step in outs[:-3]]
+                               for i in range(2)]
+                    print('\n'.join([''.join(row) for row in symbols]))
+                    print('Generator loss     : {}'.format(outs[-3]))
+                    print('Discriminator loss : {}'.format(outs[-2]))
+                bar.update(step)
+                step += 1
+        except tf.errors.OutOfRangeError:
+            bar.finish()
+            print('Done. ({} steps)'.format(step))
+        finally:
+            coord.request_stop()
+        coord.join(threads)
+        sess.close()

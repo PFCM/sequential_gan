@@ -3,8 +3,10 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import numpy as np
+import string
 
+import numpy as np
+import tensorflow as tf
 
 import data.scrape as scr
 
@@ -20,20 +22,6 @@ def _build_vocab(data):
     return vocab
 
 
-def _translate_and_pad(data, vocab):
-    """Translates according to the given sequence and adds padding"""
-    data_ids = [[vocab[symb] for symb in seq] for seq in data]
-    maxlen = max(data_ids, key=len)
-    lengths = [len(seq) for seq in data]
-    if 'PAD' not in vocab:  # we need to pad with something
-        vocab['PAD'] = len(vocab)
-    padded_data = []
-    for seq in data_ids:
-        padded_data.append(
-            seq + [vocab['PAD']] * (maxlen - len(seq)))
-    return padded_data, lengths
-
-
 def get_data():
     """Gets the raw data.
 
@@ -47,6 +35,51 @@ def get_data():
     return data, lengths, vocab
 
 
-def batch_iter(data, batch_size):
-    """yields batches and time shifted baches for learning sequences :)"""
-    pass
+def get_default_symbols():
+    """returns the symbols used by the default preprocessing"""
+    return list(string.ascii_letters) + ['>', '?', '.', '-', ',', '&']
+
+
+def _clean(input_):
+    """Tidies up -- removes unwanted punctuation. Expects a numpy array
+    of some kind of unicode, we are going to just call str on it.
+    Converts to array of int32 in the end"""
+    # place newlines with the go symbol
+    stripped = input_.replace('\n', '>')
+    # replace anything not in the vocab with '?'
+    # and also convert to ids
+    vocab = {symb: i for i, symb in enumerate(get_default_symbols())}
+    return np.array([vocab[item] if item in vocab else vocab['?']
+                     for item in stripped])
+
+
+def get_batch_tensor(batch_size, sequence_length, num_epochs,
+                     filename='names.txt',
+                     preprocessor=_clean):
+    """Gets the data in good tensorflow ways. Adds a queue runner so be sure to
+    start it."""
+    with tf.name_scope('input'):
+        # the data is tiny so just load it, clean it and throw it into a
+        # constant
+        with open(filename) as f:
+            all_data = f.read()
+        # process it
+        all_data = preprocessor(all_data)
+        # just chop off the end to make sure sequence_length * batch_size
+        # divides the total number of records
+        print(all_data)
+        num_batches = all_data.shape[0] // (sequence_length * batch_size)
+        all_data = all_data[:num_batches * sequence_length * batch_size]
+        all_data = np.reshape(all_data, (-1, sequence_length))
+        # and make the queue
+        data = tf.train.slice_input_producer(
+            [tf.constant(all_data)],
+            num_epochs=num_epochs,
+            shuffle=True,
+            capacity=batch_size*sequence_length)
+
+        # very much unconvinced this is all the right way round
+        batch = tf.train.batch([data], batch_size=batch_size,
+                               enqueue_many=True, num_threads=2)
+        batch = tf.transpose(batch)
+        return tf.unpack(batch)

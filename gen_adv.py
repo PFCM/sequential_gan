@@ -211,13 +211,13 @@ if __name__ == '__main__':
     seq_len = 25
     vocab = data.get_default_symbols()
     num_symbols = len(vocab)
-    num_epochs = 10000
+    num_epochs = 100000
 
     real_data = data.get_batch_tensor(batch_size, seq_len, num_epochs)
 
     # make both nets the same for now
     num_layers = 1
-    layer_width = 100
+    layer_width = 256
 
     # need some random integers
     noise_var = [tf.random_uniform(
@@ -233,12 +233,12 @@ if __name__ == '__main__':
     with tf.variable_scope('Discriminative') as scope:
         # first get the output of the discriminator run on the generator's out
         discriminator_g = discriminative_model(sampled_outs, 1,
-                                               10, [2, 1],
+                                               64, [32, 1],
                                                embedding, None)
         scope.reuse_variables()
         # get the same model, but with the actual data as inputs
         discriminator_d = discriminative_model(real_data, 1,
-                                               10, [2, 1],
+                                               64, [32, 1],
                                                embedding, None)
         # discriminator_g = tf.Print(discriminator_g, [discriminator_g[0, 0],
         #                                              discriminator_d[0, 0]])

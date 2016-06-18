@@ -196,7 +196,7 @@ def get_train_step(g_loss, d_loss):
     g_step = g_opt.minimize(
         g_loss, var_list=tf.get_collection('generator'),
         gate_gradients=0)
-    d_opt = tf.train.GradientDescentOptimizer(0.01)
+    d_opt = tf.train.RMSPropOptimizer(0.00001)
     d_step = d_opt.minimize(
         d_loss, var_list=tf.get_collection('discriminator'),
         gate_gradients=0)

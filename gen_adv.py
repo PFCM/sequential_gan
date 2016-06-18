@@ -277,7 +277,7 @@ if __name__ == '__main__':
                     print('{:~<30}'.format(step+1))
                     symbols = [[vocab[step[i]]
                                 for step in outs[:-3]]
-                               for i in range(2)]
+                               for i in range(10)]
                     print('\n'.join([''.join(row) for row in symbols]))
                     print('Generator loss     : {}'.format(outs[-3]))
                     print('Discriminator loss : {}'.format(outs[-2]))

@@ -190,17 +190,36 @@ def discriminator_loss(generative_batch, discriminative_batch):
         big_batch, discriminator_labels))
 
 
-def get_train_step(g_loss, d_loss):
-    """Gets (and groups) training ops for the two models"""
+def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
+    """Gets (and groups) training ops for the two models.
+    Can set it up so the generator trains a bunch of times before the
+    discriminator is updated.
+    """
+    if global_step is None:
+        global_step = tf.Variable(0, name='global_step', dtype=tf.int32,
+                                  trainable=False)
+
     g_opt = tf.train.FtrlOptimizer(0.1)
-    g_step = g_opt.minimize(
-        -g_loss, var_list=tf.get_collection('generator'),
-        gate_gradients=0)
     d_opt = tf.train.GradientDescentOptimizer(0.1)
-    d_step = d_opt.minimize(
-        d_loss, var_list=tf.get_collection('discriminator'),
-        gate_gradients=0)
-    return tf.group(g_step, d_step)
+    if generator_freq > 1:  # g_step is actually a lot of them
+        return tf.cond(
+            tf.equal((global_step % generator_freq), 0),
+            lambda: d_opt.minimize(
+                d_loss, var_list=tf.get_collection('discriminator'),
+                gate_gradients=0, global_step=global_step),
+            lambda: g_opt.minimize(
+                g_loss, var_list=tf.get_collection('generator'),
+                gate_gradients=0, global_step=global_step))
+    else:
+        g_step = g_opt.minimize(
+            g_loss, var_list=tf.get_collection('generator'),
+            gate_gradients=0, global_step=global_step)
+
+        d_step = d_opt.minimize(
+            d_loss, var_list=tf.get_collection('discriminator'),
+            gate_gradients=0, global_step=global_step)
+
+        return tf.group(g_step, d_step)
 
 if __name__ == '__main__':
     import string
@@ -208,7 +227,7 @@ if __name__ == '__main__':
     import progressbar
     # quick test
     batch_size = 10
-    seq_len = 35
+    seq_len = 5
     vocab = data.get_default_symbols()
     num_symbols = len(vocab)
     num_epochs = 100000
@@ -233,12 +252,12 @@ if __name__ == '__main__':
     with tf.variable_scope('Discriminative') as scope:
         # first get the output of the discriminator run on the generator's out
         discriminator_g = discriminative_model(sampled_outs, 1,
-                                               2, [1],
+                                               8, [1],
                                                embedding, None)
         scope.reuse_variables()
         # get the same model, but with the actual data as inputs
         discriminator_d = discriminative_model(real_data, 1,
-                                               2, [1],
+                                               8, [1],
                                                embedding, None)
         # discriminator_g = tf.Print(discriminator_g, [discriminator_g[0, 0],
         #                                              discriminator_d[0, 0]])
@@ -248,7 +267,8 @@ if __name__ == '__main__':
                                    discriminator_g)
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
-        train_step = get_train_step(generator_loss, discriminator_loss)
+        train_step = get_train_step(generator_loss, discriminator_loss,
+                                    generator_freq=25)
 
     # finally we can do stuff
     sess = tf.Session()

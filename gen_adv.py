@@ -226,8 +226,8 @@ if __name__ == '__main__':
     import random
     import progressbar
     # quick test
-    batch_size = 10
-    seq_len = 5
+    batch_size = 50
+    seq_len = 10
     vocab = data.get_default_symbols()
     num_symbols = len(vocab)
     num_epochs = 100000
@@ -236,7 +236,7 @@ if __name__ == '__main__':
 
     # make both nets the same for now
     num_layers = 1
-    layer_width = 16
+    layer_width = 256
 
     # need some random integers
     noise_var = [tf.random_uniform(
@@ -268,7 +268,7 @@ if __name__ == '__main__':
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
         train_step = get_train_step(generator_loss, discriminator_loss,
-                                    generator_freq=25)
+                                    generator_freq=50)
 
     # finally we can do stuff
     sess = tf.Session()
@@ -279,7 +279,7 @@ if __name__ == '__main__':
                    progressbar.Bar(marker='-',
                                    left='-',
                                    fill='/'),
-                   ' (', progressbar.AdaptiveETA(), ') ']
+                   ' (', progressbar.ETA(), ') ']
 
         bar = progressbar.ProgressBar(widgets=widgets, redirect_stdout=True,
                                       max_value=num_epochs)

@@ -121,7 +121,8 @@ def _recurrent_model(inputs, num_layers, width,
     """
     cell = tf.nn.rnn_cell.LSTMCell(width, state_is_tuple=True)
     if num_layers > 1:
-        cell = tf.nn.rnn_cell.MultiRNNCell([cell] * num_layers)
+        cell = tf.nn.rnn_cell.MultiRNNCell([cell] * num_layers,
+                                           state_is_tuple=True)
 
     # get real inputs
     inputs = [tf.nn.embedding_lookup([embedding_matrix], input_)
@@ -265,13 +266,13 @@ if __name__ == '__main__':
     seq_len = 10
     vocab = data.get_default_symbols()
     num_symbols = len(vocab)
-    num_epochs = 100000
+    num_epochs = 500000
 
     real_data = data.get_batch_tensor(batch_size, seq_len, num_epochs)
 
     # make both nets the same for now
-    num_layers = 1
-    layer_width = 256
+    num_layers = 2
+    layer_width = 64
 
     # need some random integers
     noise_var = [tf.random_uniform(
@@ -286,12 +287,12 @@ if __name__ == '__main__':
     with tf.variable_scope('Discriminative') as scope:
         # first get the output of the discriminator run on the generator's out
         discriminator_g = discriminative_model(sampled_outs, 1,
-                                               8, [1],
+                                               32, [16, 1],
                                                embedding, None)
         scope.reuse_variables()
         # get the same model, but with the actual data as inputs
         discriminator_d = discriminative_model(real_data, 1,
-                                               8, [1],
+                                               32, [16, 1],
                                                embedding, None)
         # discriminator_g = tf.Print(discriminator_g, [discriminator_g[0, 0],
         #                                              discriminator_d[0, 0]])
@@ -302,7 +303,7 @@ if __name__ == '__main__':
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
         train_step = get_train_step(generator_loss, discriminator_loss,
-                                    generator_freq=10)
+                                    generator_freq=500)
 
     # finally we can do stuff
     sess = tf.Session()
@@ -313,7 +314,7 @@ if __name__ == '__main__':
                    progressbar.Bar(marker='-',
                                    left='-',
                                    fill='/'),
-                   ' (', progressbar.ETA(), ') ']
+                   ' (', progressbar.AdaptiveETA(), ') ']
 
         bar = progressbar.ProgressBar(widgets=widgets, redirect_stdout=True,
                                       max_value=num_epochs)

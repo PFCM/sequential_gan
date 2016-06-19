@@ -78,22 +78,31 @@ def generative_model(inputs, num_layers, width, embedding_matrix, num_outs):
     """Gets the generative part of the model. Creates a sequence of from some
     kind of initialisation (probably noise). Puts the variables into
     a collections called 'generator'.
-    Returns the list of output tensors for now, may need more in the future.
+    Returns:
+        (outputs, samples): the projected outputs (unnormalised log
+            probabilities) and the samples used to feed back into the network.
     """
     with tf.name_scope('generator'):
         batch_size = inputs[0].get_shape()[0].value
+
+        # we are going to need to project the outputs into the appropriate
+        # space
+        proj_w = tf.get_variable(
+            'output_weights', [width, num_outs], trainable=True)
+        proj_b = tf.get_variable(
+            'output_biases', [num_outs], trainable=True,
+            initializer=tf.constant_initializer(0.0))
         initial_state, outputs, final_state = _recurrent_model(
             inputs, num_layers, width, batch_size, None,
-            embedding_matrix=embedding_matrix, feed_previous=True)
-        output_projection = tf.get_variable(
-            'output_projection', [width, num_outs], trainable=True)
-    # probably faster to batch this up into a big one?
-    return [tf.matmul(output, output_projection) for output in outputs]
+            embedding_matrix=embedding_matrix, feed_previous=True,
+            output_projection=(proj_w, proj_b))
+    return outputs
 
 
 def _recurrent_model(inputs, num_layers, width,
                      batch_size, sequence_lengths,
-                     embedding_matrix=None, feed_previous=True):
+                     embedding_matrix=None, feed_previous=True,
+                     output_projection=None):
     """gets the recurrent part of a model
 
     Args:
@@ -103,6 +112,12 @@ def _recurrent_model(inputs, num_layers, width,
         batch_size: how many to do at a time.
         sequence_lengths: a batch_size vector if ints which indicates
           how long each sequence is, ignored if feed_previous is true.
+
+    Returns:
+        initial_state, outputs, final_state. If feed_previous is true,
+            output is in fact a tuple of (outputs, samples) where `samples`
+            are the samples drawn from `outputs` and fed back in. The other
+            outputs will have been projected if a projection is present.
     """
     cell = tf.nn.rnn_cell.LSTMCell(width, state_is_tuple=True)
     if num_layers > 1:
@@ -113,15 +128,35 @@ def _recurrent_model(inputs, num_layers, width,
               for input_ in inputs]
     initial_state = cell.zero_state(batch_size, tf.float32)
     if feed_previous:
+        sampled_outputs = []
+        if output_projection:
+            projected_outputs = []
+
+        def loop_fn(prev, i):
+            if output_projection:
+                prev = tf.nn.bias_add(tf.matmul(prev, output_projection[0]),
+                                      output_projection[1])
+                projected_outputs.append(prev)
+            sample = tf.cast(tf.squeeze(tf.multinomial(prev, 1)), tf.int32)
+            sampled_outputs.append(sample)
+            return tf.nn.embedding_lookup(
+                [embedding_matrix],
+                sample)
+
         outputs, final_state = tf.nn.seq2seq.rnn_decoder(
             inputs, initial_state, cell,
-            loop_function=lambda prev, i: tf.nn.embedding_lookup(
-                [embedding_matrix],
-                tf.argmax(prev, 1)))  # could sample?
+            loop_function=loop_fn)
+        if output_projection:
+            outputs = projected_outputs
+        outputs = (outputs, sampled_outputs)
     else:
         outputs, final_state = tf.nn.rnn(
             cell, inputs, initial_state=initial_state,
             sequence_length=sequence_lengths)  # use all the inputs.
+        if output_projection:
+            outputs = [tf.nn.bias_add(
+                tf.matmul(step, output_projection[0]),
+                output_projection[1])]
     return initial_state, outputs, final_state
 
 
@@ -244,10 +279,9 @@ if __name__ == '__main__':
     embedding = tf.get_variable('embedding', shape=[num_symbols, layer_width])
 
     with tf.variable_scope('Generative'):
-        generator_outputs = generative_model(
+        generator_outputs, sampled_outs = generative_model(
             noise_var, num_layers, layer_width, embedding,
             num_symbols)
-        sampled_outs = sample_outputs(generator_outputs)
 
     with tf.variable_scope('Discriminative') as scope:
         # first get the output of the discriminator run on the generator's out
@@ -268,7 +302,7 @@ if __name__ == '__main__':
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
         train_step = get_train_step(generator_loss, discriminator_loss,
-                                    generator_freq=50)
+                                    generator_freq=10)
 
     # finally we can do stuff
     sess = tf.Session()

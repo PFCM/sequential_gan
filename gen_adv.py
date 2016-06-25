@@ -369,10 +369,11 @@ if __name__ == '__main__':
             step = 0
             bar.start()
             while (not coord.should_stop()) and (step < num_epochs):
-                outs = sess.run(sampled_outs +
-                                [generator_loss, discriminator_loss,
-                                 train_step])
+                sess.run(train_step)
                 if (step+1) % 200 == 0:
+                    outs = sess.run(sampled_outs +
+                                    [generator_loss, discriminator_loss,
+                                     train_step])
                     print('{:~<30}'.format(step+1))
                     symbols = [[vocab[step[i]]
                                 for step in outs[:-3]]

@@ -45,15 +45,24 @@ class new_collection(object):
 
 @new_collection('discriminator')
 def discriminative_model(inputs, num_layers, width, classifier_shape,
-                         embedding_matrix, sequence_lengths):
+                         embedding_matrix, sequence_lengths, project_to=-1):
     """Gets the discriminator. Puts the variables into a collection called
     'discriminator'. If embedding matrix is none, we assume the inputs are
     floats.
     """
     with tf.name_scope('discriminator'):
+        if project_to > 0:
+            projection_matrix = tf.get_variable('projection_weights',
+                                                shape=[width, project_to])
+            projection_bias = tf.get_variable('projection_bias',
+                                              shape=[project_to])
+            projection = (projection_matrix, projection_bias)
+        else:
+            projection = None
         initial_state, outputs, final_state = _recurrent_model(
             inputs, num_layers, width, batch_size, sequence_lengths,
-            embedding_matrix, feed_previous=False)
+            embedding_matrix, feed_previous=False,
+            output_projection=projection)
         # now some feed forward layers on the final output
         layer_input = outputs[-1]
         for i, layer_size in enumerate(classifier_shape):
@@ -61,7 +70,7 @@ def discriminative_model(inputs, num_layers, width, classifier_shape,
                                     name='_ff_layer_{}'.format(i+1))
             if i < len(classifier_shape)-1:
                 layer_input = tf.nn.relu(layer_input)
-    return layer_input
+    return outputs, layer_input
 
 
 def _ff_layer(in_var, size, name='layer', collections=None):
@@ -127,8 +136,9 @@ def _recurrent_model(inputs, num_layers, width,
                                            state_is_tuple=True)
 
     # get real inputs
-    inputs = [tf.nn.embedding_lookup([embedding_matrix], input_)
-              for input_ in inputs]
+    if embedding_matrix is not None:
+        inputs = [tf.nn.embedding_lookup([embedding_matrix], input_)
+                  for input_ in inputs]
     initial_state = cell.zero_state(batch_size, tf.float32)
     if feed_previous:
         sampled_outputs = []
@@ -159,7 +169,8 @@ def _recurrent_model(inputs, num_layers, width,
         if output_projection:
             outputs = [tf.nn.bias_add(
                 tf.matmul(step, output_projection[0]),
-                output_projection[1])]
+                output_projection[1])
+                       for step in outputs]
     return initial_state, outputs, final_state
 
 
@@ -213,6 +224,25 @@ def advantage(logits, choices, rewards):
     return -tf.reduce_mean(tf.pack([ll * rewards for ll in lls]))
 
 
+def softmax_weighted_sum(logits, embedding):
+    """Produces a blurred embedding vector. Or rather, a list of batches of
+    them"""
+    return [tf.matmul(tf.nn.softmax(logit), embedding) for logit in logits]
+
+
+def feature_matching_loss(discriminator_fake, discriminator_real):
+    """Gets the average squared l2 between the discriminator's activations
+    on real data and fake data. The idea is then if we use this to train
+    the generator, maybe life will be good again? Note that in order for
+    the gradients to propagate back, we will have to be feeding the
+    discriminator with something that isn't sampled.
+    """
+    diffs = tf.pack([tf.squared_difference(real, fake)
+                     for real,fake in zip(discriminator_real,
+                                          discriminator_fake)])
+    return tf.reduce_mean(diffs)
+
+
 def discriminator_loss(generative_batch, discriminative_batch):
     """Gets the average cross entropy, assuming that all of those in
     `generative batch` should have label 0 and `discriminative_batch` label 1.
@@ -237,8 +267,8 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
         global_step = tf.Variable(0, name='global_step', dtype=tf.int32,
                                   trainable=False)
 
-    g_opt = tf.train.FtrlOptimizer(0.1)
-    d_opt = tf.train.GradientDescentOptimizer(0.1)
+    g_opt = tf.train.FtrlOptimizer(0.01)
+    d_opt = tf.train.GradientDescentOptimizer(0.01)
     if generator_freq > 1:  # g_step is actually a lot of them
         return tf.cond(
             tf.equal((global_step % generator_freq), 0),
@@ -265,7 +295,7 @@ if __name__ == '__main__':
     import random
     import progressbar
     # quick test
-    batch_size = 50
+    batch_size = 100
     seq_len = 10
     vocab = data.get_default_symbols()
     num_symbols = len(vocab)
@@ -274,8 +304,8 @@ if __name__ == '__main__':
     real_data = data.get_batch_tensor(batch_size, seq_len, num_epochs)
 
     # make both nets the same for now
-    num_layers = 1
-    layer_width = 16
+    num_layers = 2
+    layer_width = 128
 
     # need some random integers
     noise_var = [tf.random_uniform(
@@ -285,30 +315,38 @@ if __name__ == '__main__':
                                              tf.GraphKeys.VARIABLES])
 
     with tf.variable_scope('Generative'):
-        generator_outputs, sampled_outs = generative_model(
+        # generator_outputs, sampled_outs = generative_model(
+        #     noise_var, num_layers, layer_width, embedding,
+        #     num_symbols)
+        generator_outputs = generative_model(
             noise_var, num_layers, layer_width, embedding,
-            num_symbols)
+            num_symbols, feed_previous=False)
+        # get these to have a look at
+        sampled_outs = sample_outputs(generator_outputs)
+        # and get something blurry to feed into the discriminator
+        combined_outs = softmax_weighted_sum(generator_outputs, embedding)
 
     with tf.variable_scope('Discriminative') as scope:
         # first get the output of the discriminator run on the generator's out
-        discriminator_g = discriminative_model(sampled_outs, 1,
-                                               32, [16, 1],
-                                               embedding, None)
+        g_acts, discriminator_g = discriminative_model(
+            combined_outs, num_layers, layer_width, [32, 1], None, None,
+            project_to=num_symbols)
         scope.reuse_variables()
         # get the same model, but with the actual data as inputs
-        discriminator_d = discriminative_model(real_data, 1,
-                                               32, [16, 1],
-                                               embedding, None)
+        d_acts, discriminator_d = discriminative_model(
+            real_data, num_layers, layer_width, [32, 1], embedding, None,
+            project_to=num_symbols)
         # discriminator_g = tf.Print(discriminator_g, [discriminator_g[0, 0],
         #                                              discriminator_d[0, 0]])
 
     with tf.variable_scope('training') as scope:
-        generator_loss = advantage(generator_outputs, sampled_outs,
-                                   discriminator_g)
+        # generator_loss = advantage(generator_outputs, sampled_outs,
+        #                            discriminator_g)
+        generator_loss = feature_matching_loss(d_acts, g_acts)
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
         train_step = get_train_step(generator_loss, discriminator_loss,
-                                    generator_freq=1000)
+                                    generator_freq=1)
 
     # finally we can do stuff
     sess = tf.Session()

@@ -281,7 +281,8 @@ if __name__ == '__main__':
     noise_var = [tf.random_uniform(
         [batch_size], maxval=num_symbols, dtype=tf.int32)] * seq_len
     embedding = tf.get_variable('embedding', shape=[num_symbols, layer_width],
-                                collections=['discriminator'])
+                                collections=['discriminator',
+                                             tf.GraphKeys.VARIABLES])
 
     with tf.variable_scope('Generative'):
         generator_outputs, sampled_outs = generative_model(

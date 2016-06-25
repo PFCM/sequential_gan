@@ -257,6 +257,7 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
 
         return tf.group(g_step, d_step)
 
+
 if __name__ == '__main__':
     import string
     import random
@@ -271,8 +272,8 @@ if __name__ == '__main__':
     real_data = data.get_batch_tensor(batch_size, seq_len, num_epochs)
 
     # make both nets the same for now
-    num_layers = 2
-    layer_width = 64
+    num_layers = 1
+    layer_width = 16
 
     # need some random integers
     noise_var = [tf.random_uniform(
@@ -303,7 +304,7 @@ if __name__ == '__main__':
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
         train_step = get_train_step(generator_loss, discriminator_loss,
-                                    generator_freq=500)
+                                    generator_freq=1000)
 
     # finally we can do stuff
     sess = tf.Session()

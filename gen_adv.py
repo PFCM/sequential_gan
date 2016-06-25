@@ -244,6 +244,13 @@ def feature_matching_loss(discriminator_fake, discriminator_real):
     return tf.reduce_mean(diffs)
 
 
+def l2_regularise(collection, amount):
+    """Returns the sum of the squared l2 norm for all variables in a given
+    collection."""
+    return tf.add_n([tf.nn.l2_loss(var) 
+                     for var in tf.get_collection(collection)]) * amount
+
+
 def discriminator_loss(generative_batch, discriminative_batch):
     """Gets the average cross entropy, assuming that all of those in
     `generative batch` should have label 0 and `discriminative_batch` label 1.
@@ -268,8 +275,8 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
         global_step = tf.Variable(0, name='global_step', dtype=tf.int32,
                                   trainable=False)
 
-    g_opt = tf.train.AdamOptimizer(0.01)
-    d_opt = tf.train.AdamOptimizer(0.01)
+    g_opt = tf.train.MomentumOptimizer(0.01, 0.9)
+    d_opt = tf.train.MomentumOptimizer(0.01, 0.9)
     if generator_freq > 1:  # g_step is actually a lot of them
         return tf.cond(
             tf.equal((global_step % generator_freq), 0),
@@ -306,7 +313,7 @@ if __name__ == '__main__':
 
     # make both nets the same for now
     num_layers = 1
-    layer_width = 128
+    layer_width = 256
 
     # need some random integers
     noise_var = [tf.random_uniform(
@@ -344,10 +351,11 @@ if __name__ == '__main__':
         # generator_loss = advantage(generator_outputs, sampled_outs,
         #                            discriminator_g)
         generator_loss = feature_matching_loss(d_acts, g_acts)
+        generator_loss += l2_regularise('generator', 0.001)
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
         train_step = get_train_step(generator_loss, discriminator_loss,
-                                    generator_freq=100)
+                                    generator_freq=50)
 
     # finally we can do stuff
     sess = tf.Session()

@@ -47,7 +47,8 @@ class new_collection(object):
 def discriminative_model(inputs, num_layers, width, classifier_shape,
                          embedding_matrix, sequence_lengths):
     """Gets the discriminator. Puts the variables into a collection called
-    'discriminator'.
+    'discriminator'. If embedding matrix is none, we assume the inputs are
+    floats.
     """
     with tf.name_scope('discriminator'):
         initial_state, outputs, final_state = _recurrent_model(
@@ -74,7 +75,8 @@ def _ff_layer(in_var, size, name='layer', collections=None):
 
 
 @new_collection('generator')
-def generative_model(inputs, num_layers, width, embedding_matrix, num_outs):
+def generative_model(inputs, num_layers, width, embedding_matrix, num_outs,
+                     feed_previous=True):
     """Gets the generative part of the model. Creates a sequence of from some
     kind of initialisation (probably noise). Puts the variables into
     a collections called 'generator'.
@@ -94,7 +96,7 @@ def generative_model(inputs, num_layers, width, embedding_matrix, num_outs):
             initializer=tf.constant_initializer(0.0))
         initial_state, outputs, final_state = _recurrent_model(
             inputs, num_layers, width, batch_size, None,
-            embedding_matrix=embedding_matrix, feed_previous=True,
+            embedding_matrix=embedding_matrix, feed_previous=feed_previous,
             output_projection=(proj_w, proj_b))
     return outputs
 
@@ -278,7 +280,8 @@ if __name__ == '__main__':
     # need some random integers
     noise_var = [tf.random_uniform(
         [batch_size], maxval=num_symbols, dtype=tf.int32)] * seq_len
-    embedding = tf.get_variable('embedding', shape=[num_symbols, layer_width])
+    embedding = tf.get_variable('embedding', shape=[num_symbols, layer_width],
+                                collections=['discriminator'])
 
     with tf.variable_scope('Generative'):
         generator_outputs, sampled_outs = generative_model(
@@ -329,7 +332,7 @@ if __name__ == '__main__':
                 outs = sess.run(sampled_outs +
                                 [generator_loss, discriminator_loss,
                                  train_step])
-                if (step+1) % 50 == 0:
+                if (step+1) % 200 == 0:
                     print('{:~<30}'.format(step+1))
                     symbols = [[vocab[step[i]]
                                 for step in outs[:-3]]

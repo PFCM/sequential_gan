@@ -269,7 +269,7 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
                                   trainable=False)
 
     g_opt = tf.train.AdamOptimizer(0.01)
-    d_opt = tf.train.GradientDescentOptimizer(0.001)
+    d_opt = tf.train.AdamOptimizer(0.01)
     if generator_freq > 1:  # g_step is actually a lot of them
         return tf.cond(
             tf.equal((global_step % generator_freq), 0),

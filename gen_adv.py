@@ -268,8 +268,8 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
         global_step = tf.Variable(0, name='global_step', dtype=tf.int32,
                                   trainable=False)
 
-    g_opt = tf.train.AdamOptimizer(0.001)
-    d_opt = tf.train.AdamOptimizer(0.001)
+    g_opt = tf.train.AdamOptimizer(0.01)
+    d_opt = tf.train.GradientDescentOptimizer(0.001)
     if generator_freq > 1:  # g_step is actually a lot of them
         return tf.cond(
             tf.equal((global_step % generator_freq), 0),
@@ -347,7 +347,7 @@ if __name__ == '__main__':
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
         train_step = get_train_step(generator_loss, discriminator_loss,
-                                    generator_freq=1)
+                                    generator_freq=100)
 
     # finally we can do stuff
     sess = tf.Session()

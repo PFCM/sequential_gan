@@ -54,8 +54,9 @@ def discriminative_model(inputs, num_layers, width, classifier_shape,
         if project_to > 0:
             projection_matrix = tf.get_variable('projection_weights',
                                                 shape=[width, project_to])
-            projection_bias = tf.get_variable('projection_bias',
-                                              shape=[project_to])
+            projection_bias = tf.get_variable(
+                'projection_bias', shape=[project_to],
+                initializer=tf.constant_initializer(0.0))
             projection = (projection_matrix, projection_bias)
         else:
             projection = None
@@ -267,8 +268,8 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
         global_step = tf.Variable(0, name='global_step', dtype=tf.int32,
                                   trainable=False)
 
-    g_opt = tf.train.AdamOptimizer(0.01)
-    d_opt = tf.train.AdamOptimizer(0.01)
+    g_opt = tf.train.AdamOptimizer(0.001)
+    d_opt = tf.train.AdamOptimizer(0.001)
     if generator_freq > 1:  # g_step is actually a lot of them
         return tf.cond(
             tf.equal((global_step % generator_freq), 0),
@@ -296,7 +297,7 @@ if __name__ == '__main__':
     import progressbar
     # quick test
     batch_size = 64
-    seq_len = 10
+    seq_len = 15
     vocab = data.get_default_symbols()
     num_symbols = len(vocab)
     num_epochs = 500000
@@ -346,7 +347,7 @@ if __name__ == '__main__':
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
         train_step = get_train_step(generator_loss, discriminator_loss,
-                                    generator_freq=10)
+                                    generator_freq=1)
 
     # finally we can do stuff
     sess = tf.Session()

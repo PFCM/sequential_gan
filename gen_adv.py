@@ -267,8 +267,8 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
         global_step = tf.Variable(0, name='global_step', dtype=tf.int32,
                                   trainable=False)
 
-    g_opt = tf.train.FtrlOptimizer(0.01)
-    d_opt = tf.train.GradientDescentOptimizer(0.01)
+    g_opt = tf.train.AdamOptimizer(0.01)
+    d_opt = tf.train.AdamOptimizer(0.01)
     if generator_freq > 1:  # g_step is actually a lot of them
         return tf.cond(
             tf.equal((global_step % generator_freq), 0),
@@ -295,7 +295,7 @@ if __name__ == '__main__':
     import random
     import progressbar
     # quick test
-    batch_size = 100
+    batch_size = 64
     seq_len = 10
     vocab = data.get_default_symbols()
     num_symbols = len(vocab)
@@ -304,7 +304,7 @@ if __name__ == '__main__':
     real_data = data.get_batch_tensor(batch_size, seq_len, num_epochs)
 
     # make both nets the same for now
-    num_layers = 2
+    num_layers = 1
     layer_width = 128
 
     # need some random integers
@@ -346,7 +346,7 @@ if __name__ == '__main__':
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
         train_step = get_train_step(generator_loss, discriminator_loss,
-                                    generator_freq=1)
+                                    generator_freq=10)
 
     # finally we can do stuff
     sess = tf.Session()

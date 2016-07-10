@@ -299,10 +299,10 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
         global_step = tf.Variable(0, name='global_step', dtype=tf.int32,
                                   trainable=False)
 
-    g_opt = tf.train.MomentumOptimizer(0.001, 0.9)
+    g_opt = tf.train.MomentumOptimizer(0.001, 0.5)
     g_loss += tf.add_n([0.00001 * tf.nn.l2_loss(var)
                         for var in tf.get_collection('generator')])
-    d_opt = tf.train.MomentumOptimizer(0.001, 0.9)
+    d_opt = tf.train.MomentumOptimizer(0.0001, 0.9)
     if generator_freq > 1:  # g_step is actually a lot of them
         return tf.cond(
             tf.equal((global_step % generator_freq), 0),
@@ -381,7 +381,7 @@ if __name__ == '__main__':
         #                            (2.0 * tf.nn.sigmoid(discriminator_g)) - 1.0)
         # generator_loss = feature_matching_loss(d_acts, g_acts)
         generator_loss = step_advantage(generator_outputs, sampled_outs,
-                                        [-diff
+                                        [diff
                                          for diff in feature_matching_loss(
                                              d_acts, g_acts)])
         discriminator_loss = discriminator_loss(discriminator_g,

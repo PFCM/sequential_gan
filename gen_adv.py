@@ -86,7 +86,7 @@ def _ff_layer(in_var, size, name='layer', collections=None):
 
 @new_collection('generator')
 def generative_model(inputs, num_layers, width, embedding_matrix, num_outs,
-                     feed_previous=True):
+                     feed_previous=True, argmax=False):
     """Gets the generative part of the model. Creates a sequence of from some
     kind of initialisation (probably noise). Puts the variables into
     a collections called 'generator'.
@@ -107,14 +107,14 @@ def generative_model(inputs, num_layers, width, embedding_matrix, num_outs,
         initial_state, outputs, final_state = _recurrent_model(
             inputs, num_layers, width, batch_size, None,
             embedding_matrix=embedding_matrix, feed_previous=feed_previous,
-            output_projection=(proj_w, proj_b))
+            output_projection=(proj_w, proj_b), argmax=argmax)
     return outputs
 
 
 def _recurrent_model(inputs, num_layers, width,
                      batch_size, sequence_lengths,
                      embedding_matrix=None, feed_previous=True,
-                     output_projection=None):
+                     output_projection=None, argmax=False):
     """gets the recurrent part of a model
 
     Args:
@@ -151,7 +151,10 @@ def _recurrent_model(inputs, num_layers, width,
                 prev = tf.nn.bias_add(tf.matmul(prev, output_projection[0]),
                                       output_projection[1])
                 projected_outputs.append(prev)
-            sample = tf.cast(tf.squeeze(tf.multinomial(prev, 1)), tf.int32)
+            if argmax:
+                sample = tf.cast(tf.argmax(prev, 1), tf.int32)
+            else:
+                sample = tf.cast(tf.squeeze(tf.multinomial(prev, 1)), tf.int32)
             sampled_outputs.append(sample)
             return tf.nn.embedding_lookup(
                 [embedding_matrix],
@@ -222,7 +225,7 @@ def advantage(logits, choices, rewards):
         batch_probs = tf.gather(tf.reshape(likelihood, [-1]),
                                 flat_idx + action)
         lls.append(batch_probs)
-    return -tf.reduce_mean(tf.pack([ll * rewards for ll in lls]))
+    return -tf.reduce_sum(tf.pack([ll * rewards for ll in lls]))
 
 
 def softmax_weighted_sum(logits, embedding):
@@ -242,13 +245,6 @@ def feature_matching_loss(discriminator_fake, discriminator_real):
                      for real,fake in zip(discriminator_real,
                                           discriminator_fake)])
     return tf.reduce_mean(diffs)
-
-
-def l2_regularise(collection, amount):
-    """Returns the sum of the squared l2 norm for all variables in a given
-    collection."""
-    return tf.add_n([tf.nn.l2_loss(var) 
-                     for var in tf.get_collection(collection)]) * amount
 
 
 def discriminator_loss(generative_batch, discriminative_batch):
@@ -275,8 +271,8 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
         global_step = tf.Variable(0, name='global_step', dtype=tf.int32,
                                   trainable=False)
 
-    g_opt = tf.train.MomentumOptimizer(0.01, 0.9)
-    d_opt = tf.train.MomentumOptimizer(0.01, 0.9)
+    g_opt = tf.train.AdamOptimizer(0.01)
+    d_opt = tf.train.AdamOptimizer(0.01)
     if generator_freq > 1:  # g_step is actually a lot of them
         return tf.cond(
             tf.equal((global_step % generator_freq), 0),
@@ -295,7 +291,7 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
             d_loss, var_list=tf.get_collection('discriminator'),
             gate_gradients=0, global_step=global_step)
 
-        return tf.group(g_step, d_step)
+        return g_step, d_step
 
 
 if __name__ == '__main__':
@@ -303,8 +299,8 @@ if __name__ == '__main__':
     import random
     import progressbar
     # quick test
-    batch_size = 64
-    seq_len = 15
+    batch_size = 32
+    seq_len = 10
     vocab = data.get_default_symbols()
     num_symbols = len(vocab)
     num_epochs = 500000
@@ -312,8 +308,8 @@ if __name__ == '__main__':
     real_data = data.get_batch_tensor(batch_size, seq_len, num_epochs)
 
     # make both nets the same for now
-    num_layers = 1
-    layer_width = 256
+    num_layers = 2
+    layer_width = 32
 
     # need some random integers
     noise_var = [tf.random_uniform(
@@ -323,39 +319,42 @@ if __name__ == '__main__':
                                              tf.GraphKeys.VARIABLES])
 
     with tf.variable_scope('Generative'):
-        # generator_outputs, sampled_outs = generative_model(
-        #     noise_var, num_layers, layer_width, embedding,
-        #     num_symbols)
-        generator_outputs = generative_model(
+        generator_outputs, sampled_outs = generative_model(
             noise_var, num_layers, layer_width, embedding,
-            num_symbols, feed_previous=False)
+            num_symbols, argmax=True)
+        # generator_outputs = generative_model(
+        #     noise_var, num_layers, layer_width, embedding,
+        #     num_symbols, feed_previous=False)
         # get these to have a look at
-        sampled_outs = sample_outputs(generator_outputs)
+        # sampled_outs = sample_outputs(generator_outputs)
         # and get something blurry to feed into the discriminator
-        combined_outs = softmax_weighted_sum(generator_outputs, embedding)
+        # combined_outs = softmax_weighted_sum(generator_outputs, embedding)
 
     with tf.variable_scope('Discriminative') as scope:
         # first get the output of the discriminator run on the generator's out
         g_acts, discriminator_g = discriminative_model(
-            combined_outs, num_layers, layer_width, [32, 1], None, None,
+            sampled_outs, num_layers, layer_width, [1], embedding, None,
             project_to=num_symbols)
+        # g_acts, discriminator_g = discriminative_model(
+        #     combined_outs, num_layers, layer_width, [32, 1], None, None,
+        #     project_to=num_symbols)
         scope.reuse_variables()
         # get the same model, but with the actual data as inputs
         d_acts, discriminator_d = discriminative_model(
-            real_data, num_layers, layer_width, [32, 1], embedding, None,
+            real_data, num_layers, layer_width, [1], embedding, None,
             project_to=num_symbols)
         # discriminator_g = tf.Print(discriminator_g, [discriminator_g[0, 0],
         #                                              discriminator_d[0, 0]])
 
     with tf.variable_scope('training') as scope:
-        # generator_loss = advantage(generator_outputs, sampled_outs,
-        #                            discriminator_g)
-        generator_loss = feature_matching_loss(d_acts, g_acts)
-        generator_loss += l2_regularise('generator', 0.001)
+        generator_loss = advantage(generator_outputs, sampled_outs,
+                                   2.0 * tf.nn.sigmoid(discriminator_g) - 1.0)
+        # generator_loss = feature_matching_loss(d_acts, g_acts)
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
-        train_step = get_train_step(generator_loss, discriminator_loss,
-                                    generator_freq=50)
+        g_train, d_train = get_train_step(
+            generator_loss, discriminator_loss,
+            generator_freq=1)
 
     # finally we can do stuff
     sess = tf.Session()
@@ -373,22 +372,28 @@ if __name__ == '__main__':
 
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+        d_loss = 0.69
         try:
             step = 0
             bar.start()
             while (not coord.should_stop()) and (step < num_epochs):
-                sess.run(train_step)
+                if step % 10 < 5 or d_loss < 0.1:
+                    sess.run(g_train)
+                else:
+                    sess.run(d_train)
+
+                # sess.run(train_step)
                 if (step+1) % 200 == 0:
                     outs = sess.run(sampled_outs +
-                                    [generator_loss, discriminator_loss,
-                                     train_step])
+                                    [generator_loss, discriminator_loss])
                     print('{:~<30}'.format(step+1))
                     symbols = [[vocab[step[i]]
                                 for step in outs[:-3]]
                                for i in range(10)]
                     print('\n'.join([''.join(row) for row in symbols]))
-                    print('Generator loss     : {}'.format(outs[-3]))
-                    print('Discriminator loss : {}'.format(outs[-2]))
+                    print('Generator loss     : {}'.format(outs[-2]))
+                    print('Discriminator loss : {}'.format(outs[-1]))
+                    d_loss = outs[-1]
                 bar.update(step)
                 step += 1
         except tf.errors.OutOfRangeError:

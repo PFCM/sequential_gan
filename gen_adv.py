@@ -281,8 +281,8 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
         global_step = tf.Variable(0, name='global_step', dtype=tf.int32,
                                   trainable=False)
 
-    g_opt = tf.train.AdamOptimizer(0.01)
-    d_opt = tf.train.AdamOptimizer(0.0001)
+    g_opt = tf.train.GradientDescentOptimizer(0.01)
+    d_opt = tf.train.GradientDescentOptimizer(0.1)
     if generator_freq > 1:  # g_step is actually a lot of them
         return tf.cond(
             tf.equal((global_step % generator_freq), 0),
@@ -358,7 +358,7 @@ if __name__ == '__main__':
 
     with tf.variable_scope('training') as scope:
         generator_loss = advantage(generator_outputs, sampled_outs,
-                                   (2.0 * tf.nn.sigmoid(discriminator_g)) - 1.0)
+                                   (20.0 * tf.nn.sigmoid(discriminator_g)) - 10.0)
         # generator_loss = feature_matching_loss(d_acts, g_acts)
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
@@ -388,7 +388,7 @@ if __name__ == '__main__':
             bar.start()
             g_trains, d_trains = 0, 0
             while (not coord.should_stop()) and (step < num_epochs):
-                if step % 10 < 5 or d_loss < 0.1:
+                if step % 10 < 5 or d_loss < 0.01:
                     sess.run(g_train)
                     g_trains += 1
                 else:

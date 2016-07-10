@@ -86,7 +86,7 @@ def _ff_layer(in_var, size, name='layer', collections=None):
 
 @new_collection('generator')
 def generative_model(inputs, num_layers, width, embedding_matrix, num_outs,
-                     feed_previous=True, argmax=False):
+                     feed_previous=True, argmax=False, epsilon=0.0):
     """Gets the generative part of the model. Creates a sequence of from some
     kind of initialisation (probably noise). Puts the variables into
     a collections called 'generator'.
@@ -114,7 +114,8 @@ def generative_model(inputs, num_layers, width, embedding_matrix, num_outs,
 def _recurrent_model(inputs, num_layers, width,
                      batch_size, sequence_lengths,
                      embedding_matrix=None, feed_previous=True,
-                     output_projection=None, argmax=False):
+                     output_projection=None, argmax=False,
+                     epsilon=0.0):
     """gets the recurrent part of a model
 
     Args:
@@ -145,6 +146,12 @@ def _recurrent_model(inputs, num_layers, width,
         sampled_outputs = []
         if output_projection:
             projected_outputs = []
+            num_outs = output_projection[1].get_shape()[0].value
+        else:
+            num_outs = width
+        rando = tf.random_uniform([], 0.0, 1.0)
+        random_move = tf.random_uniform([batch_size], maxval=num_outs,
+                                        dtype=tf.int32)
 
         def loop_fn(prev, i):
             if output_projection:
@@ -154,8 +161,10 @@ def _recurrent_model(inputs, num_layers, width,
             if argmax:
                 sample = tf.cast(tf.argmax(prev, 1), tf.int32)
             else:
-
                 sample = tf.cast(tf.squeeze(tf.multinomial(prev, 1)), tf.int32)
+                if epsilon > 0.0:
+                    sample = tf.cond(rando > epsilon,
+                                     lambda: sample, lambda: random_move)
             sampled_outputs.append(sample)
             return tf.nn.embedding_lookup(
                 [embedding_matrix],
@@ -322,7 +331,7 @@ if __name__ == '__main__':
     with tf.variable_scope('Generative'):
         generator_outputs, sampled_outs = generative_model(
             noise_var, num_layers, layer_width, embedding,
-            num_symbols, argmax=False)
+            num_symbols, argmax=False, epsilon=0.05)
         # generator_outputs = generative_model(
         #     noise_var, num_layers, layer_width, embedding,
         #     num_symbols, feed_previous=False)

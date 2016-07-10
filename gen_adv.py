@@ -281,8 +281,10 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
         global_step = tf.Variable(0, name='global_step', dtype=tf.int32,
                                   trainable=False)
 
-    g_opt = tf.train.GradientDescentOptimizer(0.01)
-    d_opt = tf.train.GradientDescentOptimizer(0.1)
+    g_opt = tf.train.MomentumOptimizer(0.001, 0.9)
+    g_loss += tf.add_n([0.001 * tf.nn.l2_loss(var)
+                        for var in tf.get_collection('generator')])
+    d_opt = tf.train.GradientDescentOptimizer(0.001)
     if generator_freq > 1:  # g_step is actually a lot of them
         return tf.cond(
             tf.equal((global_step % generator_freq), 0),

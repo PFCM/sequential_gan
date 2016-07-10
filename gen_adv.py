@@ -45,7 +45,8 @@ class new_collection(object):
 
 @new_collection('discriminator')
 def discriminative_model(inputs, num_layers, width, classifier_shape,
-                         embedding_matrix, sequence_lengths, project_to=-1):
+                         embedding_matrix, sequence_lengths, project_to=-1,
+                         seq_predictions=False):
     """Gets the discriminator. Puts the variables into a collection called
     'discriminator'. If embedding matrix is none, we assume the inputs are
     floats.
@@ -64,14 +65,25 @@ def discriminative_model(inputs, num_layers, width, classifier_shape,
             inputs, num_layers, width, batch_size, sequence_lengths,
             embedding_matrix, feed_previous=False,
             output_projection=projection)
-        # now some feed forward layers on the final output
-        layer_input = outputs[-1]
-        for i, layer_size in enumerate(classifier_shape):
-            layer_input = _ff_layer(layer_input, layer_size,
-                                    name='_ff_layer_{}'.format(i+1))
-            if i < len(classifier_shape)-1:
-                layer_input = tf.nn.relu(layer_input)
-    return outputs, layer_input
+        # now some feed forward layers
+        if seq_predictions:
+            inputs = outputs
+            pred_outs = []
+        else:
+            inputs = outputs[-1:]
+            pred_outs = None
+        for step_input in inputs:
+            layer_input = step_input
+            for i, layer_size in enumerate(classifier_shape):
+                with tf.variable_scope('ff',
+                                       reuse=step_input != inputs[0]):
+                    layer_input = _ff_layer(layer_input, layer_size,
+                                            name='_ff_layer_{}'.format(i+1))
+                    if i < len(classifier_shape)-1:
+                        layer_input = tf.nn.relu(layer_input)
+            if pred_outs is not None:
+                pred_outs.append(layer_input)
+    return pred_outs if pred_outs else outputs, layer_input
 
 
 def _ff_layer(in_var, size, name='layer', collections=None):
@@ -252,8 +264,8 @@ def step_advantage(logits, choices, rewards):
                                 flat_idx + action)
         lls.append(batch_probs)
 
-    return -tf.reduce_sum(tf.pack([ll * reward
-                                   for ll, reward in zip(log_probs, rewards)]))
+    return -tf.reduce_mean(tf.pack([ll * reward
+                                   for ll, reward in zip(lls, rewards)]))
 
 
 def softmax_weighted_sum(logits, embedding):
@@ -290,6 +302,20 @@ def discriminator_loss(generative_batch, discriminative_batch):
         big_batch, discriminator_labels))
 
 
+def seq_discriminator_loss(generative_batch, discriminative_batch):
+    """A per discriminative loss, but for when the batches are time-major lists
+    """
+    labels = [tf.constant(
+            np.vstack((np.ones((batch_size, 1), dtype=np.float32),
+                       np.zeros((batch_size, 1), dtype=np.float32))))
+              for _ in generative_batch]
+    big_batches = [tf.concat(0, [gen_batch, disc_batch])
+                   for gen_batch, disc_batch in
+                   zip(generative_batch, discriminative_batch)]
+    return tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+        tf.pack(big_batches), tf.pack(labels)))
+
+
 def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
     """Gets (and groups) training ops for the two models.
     Can set it up so the generator trains a bunch of times before the
@@ -299,10 +325,10 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
         global_step = tf.Variable(0, name='global_step', dtype=tf.int32,
                                   trainable=False)
 
-    g_opt = tf.train.MomentumOptimizer(0.001, 0.5)
-    g_loss += tf.add_n([0.00001 * tf.nn.l2_loss(var)
+    g_opt = tf.train.MomentumOptimizer(0.001, 0.9)
+    g_loss += tf.add_n([0.0001 * tf.nn.l2_loss(var)
                         for var in tf.get_collection('generator')])
-    d_opt = tf.train.MomentumOptimizer(0.0001, 0.9)
+    d_opt = tf.train.MomentumOptimizer(0.001, 0.9)
     if generator_freq > 1:  # g_step is actually a lot of them
         return tf.cond(
             tf.equal((global_step % generator_freq), 0),
@@ -351,7 +377,7 @@ if __name__ == '__main__':
     with tf.variable_scope('Generative'):
         generator_outputs, sampled_outs = generative_model(
             noise_var, num_layers, layer_width, embedding,
-            num_symbols, argmax=False, epsilon=0.05)
+            num_symbols, argmax=False, epsilon=0.0)
         # generator_outputs = generative_model(
         #     noise_var, num_layers, layer_width, embedding,
         #     num_symbols, feed_previous=False)
@@ -364,7 +390,7 @@ if __name__ == '__main__':
         # first get the output of the discriminator run on the generator's out
         g_acts, discriminator_g = discriminative_model(
             sampled_outs, num_layers, layer_width, [1], embedding, None,
-            project_to=num_symbols)
+            project_to=0, seq_predictions=True)
         # g_acts, discriminator_g = discriminative_model(
         #     combined_outs, num_layers, layer_width, [32, 1], None, None,
         #     project_to=num_symbols)
@@ -372,7 +398,7 @@ if __name__ == '__main__':
         # get the same model, but with the actual data as inputs
         d_acts, discriminator_d = discriminative_model(
             real_data, num_layers, layer_width, [1], embedding, None,
-            project_to=num_symbols)
+            project_to=0, seq_predictions=True)
         # discriminator_g = tf.Print(discriminator_g, [discriminator_g[0, 0],
         #                                              discriminator_d[0, 0]])
 
@@ -381,11 +407,11 @@ if __name__ == '__main__':
         #                            (2.0 * tf.nn.sigmoid(discriminator_g)) - 1.0)
         # generator_loss = feature_matching_loss(d_acts, g_acts)
         generator_loss = step_advantage(generator_outputs, sampled_outs,
-                                        [diff
-                                         for diff in feature_matching_loss(
-                                             d_acts, g_acts)])
-        discriminator_loss = discriminator_loss(discriminator_g,
-                                                discriminator_d)
+                                        [(2.0 * tf.nn.sigmoid(acts)) - 1.0
+                                         for acts in g_acts])
+        # discriminator_loss = discriminator_loss(discriminator_g,
+        #                                         discriminator_d)
+        discriminator_loss = seq_discriminator_loss(g_acts, d_acts)
         g_train, d_train = get_train_step(
             generator_loss, discriminator_loss,
             generator_freq=1)

@@ -154,6 +154,7 @@ def _recurrent_model(inputs, num_layers, width,
             if argmax:
                 sample = tf.cast(tf.argmax(prev, 1), tf.int32)
             else:
+
                 sample = tf.cast(tf.squeeze(tf.multinomial(prev, 1)), tf.int32)
             sampled_outputs.append(sample)
             return tf.nn.embedding_lookup(
@@ -272,7 +273,7 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
                                   trainable=False)
 
     g_opt = tf.train.AdamOptimizer(0.01)
-    d_opt = tf.train.AdamOptimizer(0.01)
+    d_opt = tf.train.AdamOptimizer(0.0001)
     if generator_freq > 1:  # g_step is actually a lot of them
         return tf.cond(
             tf.equal((global_step % generator_freq), 0),
@@ -300,7 +301,7 @@ if __name__ == '__main__':
     import progressbar
     # quick test
     batch_size = 32
-    seq_len = 10
+    seq_len = 25
     vocab = data.get_default_symbols()
     num_symbols = len(vocab)
     num_epochs = 500000
@@ -308,8 +309,8 @@ if __name__ == '__main__':
     real_data = data.get_batch_tensor(batch_size, seq_len, num_epochs)
 
     # make both nets the same for now
-    num_layers = 2
-    layer_width = 32
+    num_layers = 1
+    layer_width = 128
 
     # need some random integers
     noise_var = [tf.random_uniform(
@@ -321,7 +322,7 @@ if __name__ == '__main__':
     with tf.variable_scope('Generative'):
         generator_outputs, sampled_outs = generative_model(
             noise_var, num_layers, layer_width, embedding,
-            num_symbols, argmax=True)
+            num_symbols, argmax=False)
         # generator_outputs = generative_model(
         #     noise_var, num_layers, layer_width, embedding,
         #     num_symbols, feed_previous=False)
@@ -348,7 +349,7 @@ if __name__ == '__main__':
 
     with tf.variable_scope('training') as scope:
         generator_loss = advantage(generator_outputs, sampled_outs,
-                                   2.0 * tf.nn.sigmoid(discriminator_g) - 1.0)
+                                   (2.0 * tf.nn.sigmoid(discriminator_g)) - 1.0)
         # generator_loss = feature_matching_loss(d_acts, g_acts)
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
@@ -376,11 +377,14 @@ if __name__ == '__main__':
         try:
             step = 0
             bar.start()
+            g_trains, d_trains = 0, 0
             while (not coord.should_stop()) and (step < num_epochs):
                 if step % 10 < 5 or d_loss < 0.1:
                     sess.run(g_train)
+                    g_trains += 1
                 else:
                     sess.run(d_train)
+                    d_trains += 1
 
                 # sess.run(train_step)
                 if (step+1) % 200 == 0:
@@ -393,6 +397,9 @@ if __name__ == '__main__':
                     print('\n'.join([''.join(row) for row in symbols]))
                     print('Generator loss     : {}'.format(outs[-2]))
                     print('Discriminator loss : {}'.format(outs[-1]))
+                    print('Training ratio     : {}, g/d'.format(
+                            g_trains/d_trains if d_trains != 0 else 1))
+                    d_trains, g_trains = 0, 0
                     d_loss = outs[-1]
                 bar.update(step)
                 step += 1

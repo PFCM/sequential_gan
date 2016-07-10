@@ -107,7 +107,8 @@ def generative_model(inputs, num_layers, width, embedding_matrix, num_outs,
         initial_state, outputs, final_state = _recurrent_model(
             inputs, num_layers, width, batch_size, None,
             embedding_matrix=embedding_matrix, feed_previous=feed_previous,
-            output_projection=(proj_w, proj_b), argmax=argmax)
+            output_projection=(proj_w, proj_b), argmax=argmax,
+            epsilon=epsilon)
     return outputs
 
 
@@ -149,9 +150,7 @@ def _recurrent_model(inputs, num_layers, width,
             num_outs = output_projection[1].get_shape()[0].value
         else:
             num_outs = width
-        rando = tf.random_uniform([], 0.0, 1.0)
-        random_move = tf.random_uniform([batch_size], maxval=num_outs,
-                                        dtype=tf.int32)
+        rando = tf.random_uniform([])
 
         def loop_fn(prev, i):
             if output_projection:
@@ -163,8 +162,11 @@ def _recurrent_model(inputs, num_layers, width,
             else:
                 sample = tf.cast(tf.squeeze(tf.multinomial(prev, 1)), tf.int32)
                 if epsilon > 0.0:
-                    sample = tf.cond(rando > epsilon,
-                                     lambda: sample, lambda: random_move)
+                    sample = tf.cond(rando > tf.constant(epsilon),
+                                     lambda: sample, 
+                                     lambda: tf.random_uniform(
+                            [batch_size], maxval=num_outs,
+                                        dtype=tf.int32))
             sampled_outputs.append(sample)
             return tf.nn.embedding_lookup(
                 [embedding_matrix],
@@ -282,9 +284,9 @@ def get_train_step(g_loss, d_loss, global_step=None, generator_freq=1):
                                   trainable=False)
 
     g_opt = tf.train.MomentumOptimizer(0.001, 0.9)
-    g_loss += tf.add_n([0.001 * tf.nn.l2_loss(var)
+    g_loss += tf.add_n([0.00001 * tf.nn.l2_loss(var)
                         for var in tf.get_collection('generator')])
-    d_opt = tf.train.GradientDescentOptimizer(0.001)
+    d_opt = tf.train.MomentumOptimizer(0.001, 0.9)
     if generator_freq > 1:  # g_step is actually a lot of them
         return tf.cond(
             tf.equal((global_step % generator_freq), 0),
@@ -311,7 +313,7 @@ if __name__ == '__main__':
     import random
     import progressbar
     # quick test
-    batch_size = 32
+    batch_size = 128
     seq_len = 25
     vocab = data.get_default_symbols()
     num_symbols = len(vocab)
@@ -321,7 +323,7 @@ if __name__ == '__main__':
 
     # make both nets the same for now
     num_layers = 1
-    layer_width = 128
+    layer_width = 100
 
     # need some random integers
     noise_var = [tf.random_uniform(
@@ -360,7 +362,7 @@ if __name__ == '__main__':
 
     with tf.variable_scope('training') as scope:
         generator_loss = advantage(generator_outputs, sampled_outs,
-                                   (20.0 * tf.nn.sigmoid(discriminator_g)) - 10.0)
+                                   (2.0 * tf.nn.sigmoid(discriminator_g)) - 1.0)
         # generator_loss = feature_matching_loss(d_acts, g_acts)
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
@@ -390,11 +392,11 @@ if __name__ == '__main__':
             bar.start()
             g_trains, d_trains = 0, 0
             while (not coord.should_stop()) and (step < num_epochs):
-                if step % 10 < 5 or d_loss < 0.01:
+                if step % 2 == 0 or d_loss < 0.01:
                     sess.run(g_train)
                     g_trains += 1
                 else:
-                    sess.run(d_train)
+                    d_loss, _ = sess.run([discriminator_loss, d_train])
                     d_trains += 1
 
                 # sess.run(train_step)
@@ -408,8 +410,8 @@ if __name__ == '__main__':
                     print('\n'.join([''.join(row) for row in symbols]))
                     print('Generator loss     : {}'.format(outs[-2]))
                     print('Discriminator loss : {}'.format(outs[-1]))
-                    print('Training ratio     : {}, g/d'.format(
-                            g_trains/d_trains if d_trains != 0 else 1))
+                    print('Training ratio     : {}/{} (g/d)'.format(
+                            g_trains, d_trains))
                     d_trains, g_trains = 0, 0
                     d_loss = outs[-1]
                 bar.update(step)

@@ -163,7 +163,7 @@ def _recurrent_model(inputs, num_layers, width,
                 sample = tf.cast(tf.squeeze(tf.multinomial(prev, 1)), tf.int32)
                 if epsilon > 0.0:
                     sample = tf.cond(rando > tf.constant(epsilon),
-                                     lambda: sample, 
+                                     lambda: sample,
                                      lambda: tf.random_uniform(
                             [batch_size], maxval=num_outs,
                                         dtype=tf.int32))
@@ -240,6 +240,22 @@ def advantage(logits, choices, rewards):
     return -tf.reduce_sum(tf.pack([ll * rewards for ll in lls]))
 
 
+def step_advantage(logits, choices, rewards):
+    """Gets advantage when rewards is in fact a sequence of rewards. Uses the
+    same method otherwise (no discounting)."""
+    log_probs = [tf.nn.log_softmax(step) for step in logits]
+    batch_size, num_classes = log_probs[0].get_shape().as_list()
+    lls = []
+    flat_idx = tf.range(0, batch_size) * num_classes
+    for action, likelihood in zip(choices, log_probs):
+        batch_probs = tf.gather(tf.reshape(likelihood, [-1]),
+                                flat_idx + action)
+        lls.append(batch_probs)
+
+    return -tf.reduce_sum(tf.pack([ll * reward
+                                   for ll, reward in zip(log_probs, rewards)]))
+
+
 def softmax_weighted_sum(logits, embedding):
     """Produces a blurred embedding vector. Or rather, a list of batches of
     them"""
@@ -253,10 +269,10 @@ def feature_matching_loss(discriminator_fake, discriminator_real):
     the gradients to propagate back, we will have to be feeding the
     discriminator with something that isn't sampled.
     """
-    diffs = tf.pack([tf.squared_difference(real, fake)
-                     for real,fake in zip(discriminator_real,
-                                          discriminator_fake)])
-    return tf.reduce_mean(diffs)
+    diffs = [tf.squared_difference(real, fake)
+             for real,fake in zip(discriminator_real,
+                                  discriminator_fake)]
+    return diffs # tf.reduce_mean(diffs)
 
 
 def discriminator_loss(generative_batch, discriminative_batch):
@@ -361,9 +377,13 @@ if __name__ == '__main__':
         #                                              discriminator_d[0, 0]])
 
     with tf.variable_scope('training') as scope:
-        generator_loss = advantage(generator_outputs, sampled_outs,
-                                   (2.0 * tf.nn.sigmoid(discriminator_g)) - 1.0)
+        # generator_loss = advantage(generator_outputs, sampled_outs,
+        #                            (2.0 * tf.nn.sigmoid(discriminator_g)) - 1.0)
         # generator_loss = feature_matching_loss(d_acts, g_acts)
+        generator_loss = step_advantage(generator_outputs, sampled_outs,
+                                        [-diff
+                                         for diff in feature_matching_loss(
+                                             d_acts, g_acts)])
         discriminator_loss = discriminator_loss(discriminator_g,
                                                 discriminator_d)
         g_train, d_train = get_train_step(

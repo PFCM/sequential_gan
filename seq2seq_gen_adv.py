@@ -33,8 +33,8 @@ def encoder(inputs, num_layers, width, sequence_lengths,
     # not sure why this is necessary
     batch_size = inputs[0].get_shape()[0].value
 
-    initial_state, outputs, final_state =gen_adv._recurrent_model(
-        inputs, num_layers, width, batch_size, sequence_lengths,
+    initial_state, outputs, final_state = gen_adv._recurrent_model(
+        inputs, num_layers, width, batch_size, None, #sequence_lengths,
         embedding_matrix=embedding_matrix, feed_previous=False, cell='gru')
 
     return final_state
@@ -68,7 +68,7 @@ def decoder(inputs, initial_state, num_layers, width, embedding_matrix,
         inputs, num_layers, width, batch_size, None,
         embedding_matrix=embedding_matrix, feed_previous=True,
         argmax=True, starting_state=initial_state,
-        output_projection=(proj_W, proj_b))
+        output_projection=(proj_W, proj_b), cell='gru')
     return outputs[0]
 
 
@@ -113,6 +113,18 @@ def reconstruction_loss(sequence, target, weights):
     return tf.nn.seq2seq.sequence_loss(sequence, target, weights)
 
 
+def fill_feed(input_vars, input_data, length_var, lengths):
+    """fills up a feed dict. Note that input_data will be the wrong way around
+    """
+    input_data = input_data.T
+    feed = {}
+    for var, step in zip(input_vars, input_data[:, ...]):
+        feed[var] = step
+    feed[length_var] = lengths
+
+    return feed
+
+
 def main(_):
     # for now, let's just ensure the unsupervised training for the generator
     # does something
@@ -121,7 +133,7 @@ def main(_):
     import data
 
     batch_size = 32
-    data, lengths, vocab = data.get_data()
+    np_data, lengths, vocab = data.get_data()
     vocab_size = len(vocab)
     max_sequence_length = np.max(lengths)
     embedding_size = 64
@@ -133,12 +145,49 @@ def main(_):
 
     disc_shape = [500, 25]
 
+    print('{:~^60}'.format('getting data stuff'), end='', flush=True)
     embedding = tf.get_variable('embedding',
                                 shape=[vocab_size, embedding_size])
 
+    # these are also the targets
+    input_pls = [tf.placeholder(
+        tf.int32, [batch_size], name='input_{}'.format(i))
+                 for i in range(max_sequence_length)]
+    # actual input to the models will be this reversed
+    model_in = tf.unpack(tf.reverse(tf.pack(input_pls), [True, False]))
+    length_pl = tf.placeholder(tf.int32, [batch_size])
+    weights_pls = [tf.placeholder(
+        tf.float32, [batch_size], name='weight_{}'.format(i))
+                   for i in range(max_sequence_length)]
+    print('\r{:\\^60}'.format('got data stuff'))
 
+    print('{:~^60}'.format('getting model'), end='', flush=True)
     with tf.variable_scope('generative'):
-        sequence_embedding = encoder()
+        sequence_embedding = encoder(model_in, num_layers, layer_width,
+                                     input_pls, embedding_matrix=embedding)
+        generated_logits = decoder(input_pls, sequence_embedding, num_layers,
+                                   layer_width, embedding, vocab_size)
+        reconstruction_error = reconstruction_loss(generated_logits, input_pls,
+                                                   weights_pls)
+
+        unsup_opt = tf.train.AdamOptimizer(0.001)
+        unsup_train_op = unsup_opt.minimize(reconstruction_error)
+    print('\r{:/^60}'.format('got model'))
+
+    sess = tf.Session()
+
+    print('{:~^60}'.format('initialising'), end='', flush=True)
+    sess.run(tf.initialize_all_variables())
+    print('\r{:\\^60}'.format('initialised'))
+
+    for epoch in range(num_epochs):
+        for batch_data, batch_lengths in data.iterate_batches(np_data,
+                                                              lengths,
+                                                              batch_size):
+            feed = fill_feed(input_pls, batch_data, length_pl, batch_lengths)
+            batch_error, _ = sess.run([reconstruction_error, unsup_train_op],
+                                      feed_dict=feed)
+            print(batch_error)
 
 
 if __name__ == '__main__':

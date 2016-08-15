@@ -9,6 +9,7 @@ from __future__ import division
 from __future__ import print_function
 
 import string
+import random
 
 import numpy as np
 import tensorflow as tf
@@ -38,7 +39,22 @@ def get_data():
     vocab = get_default_symbols()
     vocab = {symb: i for i, symb in enumerate(sorted(vocab))}
     data, lengths = _translate_and_pad(data, vocab)
-    return data, lengths, vocab
+    return np.array(data), np.array(lengths), vocab
+
+
+def iterate_batches(data, lengths, batch_size, shuffle=True):
+    """A generator to go through the data in mini batches"""
+    # data is [num, max_length], lengths is [num]
+    # we are going to have to do some fancy slicing
+    indices = list(range(len(data)))
+    if shuffle:
+        random.shuffle(indices)
+
+    num_batches = len(indices) // batch_size
+
+    for i in range(num_batches):
+        batch_idces =  indices[i*batch_size:(i+1)*batch_size]
+        yield data[batch_idces, ...], lengths[batch_idces]
 
 
 def _translate_and_pad(data, vocab):

@@ -166,7 +166,10 @@ def _recurrent_model(inputs, num_layers, width,
     if embedding_matrix is not None:
         inputs = [tf.nn.embedding_lookup([embedding_matrix], input_)
                   for input_ in inputs]
-    initial_state = starting_state or cell.zero_state(batch_size, tf.float32)
+    if starting_state is None:
+        initial_state = cell.zero_state(batch_size, tf.float32)
+    else:
+        initial_state = starting_state
     if feed_previous:
         sampled_outputs = []
         if output_projection:
@@ -199,7 +202,11 @@ def _recurrent_model(inputs, num_layers, width,
         outputs, final_state = tf.nn.seq2seq.rnn_decoder(
             inputs, initial_state, cell,
             loop_function=loop_fn)
-        if output_projection:
+        if output_projection:  # still need to do the last one
+            projected_outputs.append(
+                tf.nn.bias_add(
+                    tf.matmul(outputs[-1], output_projection[0]),
+                    output_projection[1]))
             outputs = projected_outputs
         outputs = (outputs, sampled_outputs)
     else:

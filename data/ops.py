@@ -86,7 +86,7 @@ def _translate_and_pad(data, vocab):
 def get_default_symbols():
     """returns the symbols used by the default preprocessing"""
     return list(string.ascii_letters) + ['>', '?', '.', '-', ',', '&', '~',
-                                         '|', ' ']
+                                         '|', ' ', '!', "'", '"']
 
 
 def _clean(input_):

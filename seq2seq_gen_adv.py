@@ -143,12 +143,12 @@ def main(_):
     inv_vocab = {b: a for a, b in vocab.items()}
     vocab_size = len(vocab)
     max_sequence_length = np.max(lengths)
-    embedding_size = 64
+    embedding_size = 32
 
-    num_epochs = 5000
+    num_epochs = 500
 
     num_layers = 1
-    layer_width = 100
+    layer_width = 128
 
     disc_shape = [500, 25]
 
@@ -190,9 +190,9 @@ def main(_):
 
     widgets = ['(ﾉ◕ヮ◕)ﾉ* ',
                progressbar.AnimatedMarker(markers='←↖↑↗→↘↓↙'),
-               progressbar.Bar(marker='-',
+               progressbar.Bar(marker='/',
                                left='-',
-                               fill='/'),
+                               fill='~'),
                ' (', progressbar.AdaptiveETA(), ') ']
 
     bar = progressbar.ProgressBar(widgets=widgets, redirect_stdout=True,

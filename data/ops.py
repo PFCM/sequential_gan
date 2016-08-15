@@ -1,4 +1,9 @@
-"""Actually dealing with the stuff"""
+"""Actually dealing with the stuff.
+
+Note: go symbol is '>'
+      pad symbol is '~'
+      end symbol is '|'
+"""
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -30,15 +35,42 @@ def get_data():
             length of sequences (list of ints) and the vocab.
     """
     data = scr.get_names()
-    data = _clean(data)
     vocab = get_default_symbols()
+    vocab = {symb: i for i, symb in enumerate(sorted(vocab))}
     data, lengths = _translate_and_pad(data, vocab)
     return data, lengths, vocab
 
 
+def _translate_and_pad(data, vocab):
+    """Translates raw data by replacing symbols according to vocab.
+
+    Returns a list of lists (or possibly arrays) of ints.
+    """
+    all_data = []
+    for line in data:
+        all_data.append([vocab['>']] +
+                        [vocab[symb] if symb in vocab else vocab['?']
+                         for symb in line] +
+                        [vocab['|']])
+    # and pad them all to the maximum length
+    max_len = max([len(seq) for seq in all_data])
+    lengths = []
+    for i in range(len(all_data)):
+        lengths.append(len(all_data[i]))
+        if lengths[-1] < max_len:
+            all_data[i].extend([vocab['~']] * (max_len - lengths[-1]))
+
+    # inv_vocab = {b: a for a, b in vocab.items()}
+    # print('\n'.join([''.join([inv_vocab[sym] for sym in seq])
+    #                  for seq in all_data]))
+
+    return all_data, lengths
+
+
 def get_default_symbols():
     """returns the symbols used by the default preprocessing"""
-    return list(string.ascii_letters) + ['>', '?', '.', '-', ',', '&']
+    return list(string.ascii_letters) + ['>', '?', '.', '-', ',', '&', '~',
+                                         '|', ' ']
 
 
 def _clean(input_):

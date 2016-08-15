@@ -113,13 +113,19 @@ def reconstruction_loss(sequence, target, weights):
     return tf.nn.seq2seq.sequence_loss(sequence, target, weights)
 
 
-def fill_feed(input_vars, input_data, length_var, lengths):
+def fill_feed(input_vars, input_data, length_var, lengths, weight_vars):
     """fills up a feed dict. Note that input_data will be the wrong way around
     """
     input_data = input_data.T
     feed = {}
-    for var, step in zip(input_vars, input_data[:, ...]):
-        feed[var] = step
+    counter = 0
+    for in_var, step, weight_var in zip(input_vars, input_data[:, ...],
+                                        weight_vars):
+        feed[in_var] = step
+        feed[weight_var] = np.array([1.0 if counter < lengths[i] else 0.0
+                                     for i in range(lengths.shape[0])],
+                                    dtype=np.float32)
+        counter += 1
     feed[length_var] = lengths
 
     return feed
@@ -134,6 +140,7 @@ def main(_):
 
     batch_size = 32
     np_data, lengths, vocab = data.get_data()
+    inv_vocab = {b: a for a, b in vocab.items()}
     vocab_size = len(vocab)
     max_sequence_length = np.max(lengths)
     embedding_size = 64
@@ -167,6 +174,7 @@ def main(_):
                                      input_pls, embedding_matrix=embedding)
         generated_logits = decoder(input_pls, sequence_embedding, num_layers,
                                    layer_width, embedding, vocab_size)
+        generated_sequence = [tf.argmax(step, 1) for step in generated_logits]
         reconstruction_error = reconstruction_loss(generated_logits, input_pls,
                                                    weights_pls)
 
@@ -180,14 +188,38 @@ def main(_):
     sess.run(tf.initialize_all_variables())
     print('\r{:\\^60}'.format('initialised'))
 
-    for epoch in range(num_epochs):
+    widgets = ['(ﾉ◕ヮ◕)ﾉ* ',
+               progressbar.AnimatedMarker(markers='←↖↑↗→↘↓↙'),
+               progressbar.Bar(marker='-',
+                               left='-',
+                               fill='/'),
+               ' (', progressbar.AdaptiveETA(), ') ']
+
+    bar = progressbar.ProgressBar(widgets=widgets, redirect_stdout=True,
+                                  max_value=num_epochs)
+    for epoch in bar(range(num_epochs)):
+        epoch_loss = 0
+        epoch_steps = 0
         for batch_data, batch_lengths in data.iterate_batches(np_data,
                                                               lengths,
                                                               batch_size):
-            feed = fill_feed(input_pls, batch_data, length_pl, batch_lengths)
+            feed = fill_feed(input_pls, batch_data, length_pl, batch_lengths,
+                             weights_pls)
             batch_error, _ = sess.run([reconstruction_error, unsup_train_op],
                                       feed_dict=feed)
-            print(batch_error)
+            epoch_loss += batch_error
+            epoch_steps += 1
+        # have a look maybe?
+        print('Epoch {}, unsupervised reconstruction error: {}'.format(
+            epoch+1, epoch_loss/epoch_steps))
+        last_batch = sess.run(generated_sequence, feed_dict=feed)
+        test_index = np.random.randint(batch_size)
+        print(''.join([inv_vocab[step[test_index]]
+                       for step in batch_data.T[:, ...]]))
+        print(' -->')
+        print(''.join([inv_vocab[step[test_index]]
+                       for step in last_batch]))
+
 
 
 if __name__ == '__main__':

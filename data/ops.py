@@ -30,7 +30,8 @@ def get_data():
             length of sequences (list of ints) and the vocab.
     """
     data = scr.get_names()
-    vocab = _build_vocab(data)
+    data = _clean(data)
+    vocab = get_default_symbols()
     data, lengths = _translate_and_pad(data, vocab)
     return data, lengths, vocab
 

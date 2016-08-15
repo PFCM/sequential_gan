@@ -128,7 +128,7 @@ def _recurrent_model(inputs, num_layers, width,
                      batch_size, sequence_lengths,
                      embedding_matrix=None, feed_previous=True,
                      output_projection=None, argmax=False,
-                     epsilon=0.0):
+                     epsilon=0.0, cell='lstm', starting_state=None):
     """gets the recurrent part of a model
 
     Args:
@@ -138,6 +138,10 @@ def _recurrent_model(inputs, num_layers, width,
         batch_size: how many to do at a time.
         sequence_lengths: a batch_size vector if ints which indicates
           how long each sequence is, ignored if feed_previous is true.
+        cell: the RNN cell to actually use. Default is `lstm`, `gru` or
+          `vanilla` are also supported.
+        starting_state: the first state of the network, if you need to care
+          about it (eg. when decoding).
 
     Returns:
         initial_state, outputs, final_state. If feed_previous is true,
@@ -145,7 +149,15 @@ def _recurrent_model(inputs, num_layers, width,
             are the samples drawn from `outputs` and fed back in. The other
             outputs will have been projected if a projection is present.
     """
-    cell = tf.nn.rnn_cell.LSTMCell(width, state_is_tuple=True)
+    if cell == 'lstm':
+        cell = tf.nn.rnn_cell.LSTMCell(width, state_is_tuple=True)
+    elif cell == 'gru':
+        cell = tf.nn.rnn_cell.GRUCell(width)
+    elif cell == 'vanilla':
+        cell = tf.nn.rnn_cell.BasicRNNCell(width)
+    else:
+        raise ValueError('Unknown cell: {}'.format(cell))
+
     if num_layers > 1:
         cell = tf.nn.rnn_cell.MultiRNNCell([cell] * num_layers,
                                            state_is_tuple=True)
@@ -154,7 +166,7 @@ def _recurrent_model(inputs, num_layers, width,
     if embedding_matrix is not None:
         inputs = [tf.nn.embedding_lookup([embedding_matrix], input_)
                   for input_ in inputs]
-    initial_state = cell.zero_state(batch_size, tf.float32)
+    initial_state = starting_state or cell.zero_state(batch_size, tf.float32)
     if feed_previous:
         sampled_outputs = []
         if output_projection:

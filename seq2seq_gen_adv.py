@@ -6,7 +6,7 @@ import gen_adv
 
 
 @gen_adv.new_collection('generator')
-def generator(inputs, shape):
+def generator(inputs, shape, start_number=0):
     """Gets a generator which is just an mlp.
 
     Args:
@@ -20,7 +20,7 @@ def generator(inputs, shape):
     """
     for i, layer in enumerate(shape):
         inputs = gen_adv._ff_layer(inputs, layer,
-                                      'generator-{}'.format(i))
+                                      'generator-{}'.format(i + start_number))
         if i != len(shape) - 1:
             inputs = tf.nn.relu(inputs)
 
@@ -160,22 +160,22 @@ def main(_):
     import progressbar
     import data
 
-    batch_size = 32
+    batch_size = 64
     np_data, lengths, vocab = data.get_data()
     inv_vocab = {b: a for a, b in vocab.items()}
     vocab_size = len(vocab)
     max_sequence_length = np.max(lengths)
-    embedding_size = 32
+    embedding_size = 128
 
-    num_epochs = 5
+    num_epochs = 1000
 
     num_layers = 1
-    layer_width = 128
+    layer_width = 256
 
-    disc_shape = [500, 25]
+    disc_shape = [100, 25]
 
-    gen_shape = [128, 128, layer_width]
-    noise_var = tf.random_normal([batch_size, 128])
+    gen_shape = [100, layer_width]
+    noise_var = tf.random_normal([batch_size, 64])
 
     print('{:~^60}'.format('getting data stuff'), end='', flush=True)
     embedding = tf.get_variable('embedding',
@@ -209,6 +209,10 @@ def main(_):
 
         # now get a feedforward generator which takes noise to a fake embedding
         fake_embeddings = generator(noise_var, gen_shape)
+        noise_width = noise_var.get_shape()[1].value
+        first_half = generator(sequence_embedding, gen_shape[::-1] + [noise_width], -len(gen_shape) - 1)
+        scope.reuse_variables()
+        reproductions = generator(first_half, gen_shape)
 
     with tf.variable_scope('discriminative') as scope:
         disc_real = discriminator(sequence_embedding, disc_shape)
@@ -218,7 +222,7 @@ def main(_):
 
         disc_loss = gen_adv.discriminator_loss(disc_fake, disc_real)
 
-        disc_opt = tf.train.AdamOptimizer(0.001)
+        disc_opt = tf.train.AdamOptimizer(0.1)
         disc_train_op = disc_opt.minimize(
             disc_loss, var_list=tf.get_collection('embedding'))
 
@@ -226,8 +230,9 @@ def main(_):
         # the loss for the generator is how correct the discriminator was on
         # its batch.
         # (this could be the wrong way round, depends on class labels)
-        gen_loss = -tf.reduce_mean(tf.log(tf.nn.sigmoid(disc_fake)))
-        gen_opt = tf.train.AdamOptimizer(0.001)
+        gen_loss = -tf.reduce_mean(tf.log(1.0 - tf.nn.sigmoid(disc_fake)))
+        gen_loss += 10.0 * tf.reduce_mean(tf.squared_difference(sequence_embedding, reproductions))
+        gen_opt = tf.train.AdamOptimizer(0.00001)
         gen_train_op = gen_opt.minimize(
             gen_loss, var_list=tf.get_collection('generator'))
 
@@ -270,12 +275,13 @@ def main(_):
         print(' -->')
         print(''.join([inv_vocab[step[test_index]]
                        for step in last_batch]))
-        if (epoch_loss / epoch_steps) <= 0.01:
+        if (epoch_loss / epoch_steps) <= 0.1:
+            bar.finish()
             print('Happy with the embeddings because threshold.')
+            break
 
     print('Moving on to gen-adv training')
-    bar = progressbar.ProgressBar(widgets=widgets, redirect_stdout=True,
-                                  max_value=num_epochs)
+    bar = progressbar.ProgressBar(widgets=widgets, redirect_stdout=True)
     for epoch in bar(range(num_epochs * 10)):
         disc_epoch_loss, gen_epoch_loss = 0, 0
         epoch_steps = 0
@@ -284,9 +290,14 @@ def main(_):
                                                               batch_size):
             feed = fill_feed(input_pls, batch_data, length_pl, batch_lengths,
                              weights_pls)
-            disc_error, gen_error, _, _ = sess.run(
-                [disc_loss, gen_loss, disc_train_op, gen_train_op],
-                feed_dict=feed)
+            if epoch_steps > 0 and gen_error/epoch_steps >= 0.1:
+                disc_error, gen_error, _, _ = sess.run(
+                    [disc_loss, gen_loss, disc_train_op, gen_train_op],
+                    feed_dict=feed)
+            else:
+                disc_error, gen_error, _ = sess.run(
+                    [disc_loss, gen_loss, disc_train_op],
+                    feed_dict=feed)
             disc_epoch_loss += disc_error
             gen_epoch_loss += gen_error
             epoch_steps += 1

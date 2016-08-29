@@ -313,6 +313,7 @@ def discriminator_loss(generative_batch, discriminative_batch):
     generator is trying to make the discriminator assign its samples high
     scores."""
     # labels
+    batch_size = generative_batch.get_shape()[0].value
     discriminator_labels = tf.constant(
             np.vstack((np.ones((batch_size, 1), dtype=np.float32),
                        np.zeros((batch_size, 1), dtype=np.float32))))

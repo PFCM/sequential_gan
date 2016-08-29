@@ -6,6 +6,28 @@ import gen_adv
 
 
 @gen_adv.new_collection('generator')
+def generator(inputs, shape):
+    """Gets a generator which is just an mlp.
+
+    Args:
+        inputs: probably random noise.
+        shape: list of ints, describing the shape. The last layer is left
+            linear and returned, so should be the same size as the embeddings
+            we are copying.
+
+    Returns:
+        tensor: the final layer, with no non linearity.
+    """
+    for i, layer in enumerate(shape):
+        inputs = gen_adv._ff_layer(inputs, layer,
+                                      'generator-{}'.format(i))
+        if i != len(shape) - 1:
+            inputs = tf.nn.relu(inputs)
+
+    return inputs
+
+
+@gen_adv.new_collection('embedding')
 def encoder(inputs, num_layers, width, sequence_lengths,
             embedding_matrix=None):
     """Gets an encoder, which maps a sequence to a fixed length vector
@@ -40,7 +62,7 @@ def encoder(inputs, num_layers, width, sequence_lengths,
     return final_state
 
 
-@gen_adv.new_collection('generator')
+@gen_adv.new_collection('embedding')
 def decoder(inputs, initial_state, num_layers, width, embedding_matrix,
             vocab_size):
     """Get a decoder, which attends to a single input (probably the GO symbol)
@@ -73,7 +95,7 @@ def decoder(inputs, initial_state, num_layers, width, embedding_matrix,
 
 
 @gen_adv.new_collection('discriminator')
-def discrimator(input_var, shape):
+def discriminator(input_var, shape):
     """Gets the discriminator, which is a feed forward MLP with len(shape)
     layers, in which the i-th layer has layers[i] units. Internal layers use
     ReLU nonlinearities, the raw logit is returned for the output.
@@ -86,12 +108,12 @@ def discrimator(input_var, shape):
         tensor: the logit, representing prediction re. whether the input was
             generated from the data or not.
     """
-    for i, layer in enumerate(layers):
+    for i, layer in enumerate(shape):
         input_var = gen_adv._ff_layer(input_var, layer,
                                       'discriminator-{}'.format(i))
         input_var = tf.nn.relu(input_var)
 
-    logit = _ff_layer(input_var, 1, 'discriminator-out')
+    logit = gen_adv._ff_layer(input_var, 1, 'discriminator-out')
 
     return logit
 
@@ -145,12 +167,15 @@ def main(_):
     max_sequence_length = np.max(lengths)
     embedding_size = 32
 
-    num_epochs = 500
+    num_epochs = 5
 
     num_layers = 1
     layer_width = 128
 
     disc_shape = [500, 25]
+
+    gen_shape = [128, 128, layer_width]
+    noise_var = tf.random_normal([batch_size, 128])
 
     print('{:~^60}'.format('getting data stuff'), end='', flush=True)
     embedding = tf.get_variable('embedding',
@@ -169,7 +194,7 @@ def main(_):
     print('\r{:\\^60}'.format('got data stuff'))
 
     print('{:~^60}'.format('getting model'), end='', flush=True)
-    with tf.variable_scope('generative'):
+    with tf.variable_scope('generative') as scope:
         sequence_embedding = encoder(model_in, num_layers, layer_width,
                                      input_pls, embedding_matrix=embedding)
         generated_logits = decoder(input_pls, sequence_embedding, num_layers,
@@ -179,7 +204,33 @@ def main(_):
                                                    weights_pls)
 
         unsup_opt = tf.train.AdamOptimizer(0.001)
-        unsup_train_op = unsup_opt.minimize(reconstruction_error)
+        unsup_train_op = unsup_opt.minimize(
+            reconstruction_error, var_list=tf.get_collection('embedding'))
+
+        # now get a feedforward generator which takes noise to a fake embedding
+        fake_embeddings = generator(noise_var, gen_shape)
+
+    with tf.variable_scope('discriminative') as scope:
+        disc_real = discriminator(sequence_embedding, disc_shape)
+
+        scope.reuse_variables()
+        disc_fake = discriminator(fake_embeddings, disc_shape)
+
+        disc_loss = gen_adv.discriminator_loss(disc_fake, disc_real)
+
+        disc_opt = tf.train.AdamOptimizer(0.001)
+        disc_train_op = disc_opt.minimize(
+            disc_loss, var_list=tf.get_collection('embedding'))
+
+    with tf.variable_scope('generative'):
+        # the loss for the generator is how correct the discriminator was on
+        # its batch.
+        # (this could be the wrong way round, depends on class labels)
+        gen_loss = -tf.reduce_mean(tf.log(tf.nn.sigmoid(disc_fake)))
+        gen_opt = tf.train.AdamOptimizer(0.001)
+        gen_train_op = gen_opt.minimize(
+            gen_loss, var_list=tf.get_collection('generator'))
+
     print('\r{:/^60}'.format('got model'))
 
     sess = tf.Session()
@@ -219,7 +270,39 @@ def main(_):
         print(' -->')
         print(''.join([inv_vocab[step[test_index]]
                        for step in last_batch]))
+        if (epoch_loss / epoch_steps) <= 0.01:
+            print('Happy with the embeddings because threshold.')
 
+    print('Moving on to gen-adv training')
+    bar = progressbar.ProgressBar(widgets=widgets, redirect_stdout=True,
+                                  max_value=num_epochs)
+    for epoch in bar(range(num_epochs * 10)):
+        disc_epoch_loss, gen_epoch_loss = 0, 0
+        epoch_steps = 0
+        for batch_data, batch_lengths in data.iterate_batches(np_data,
+                                                              lengths,
+                                                              batch_size):
+            feed = fill_feed(input_pls, batch_data, length_pl, batch_lengths,
+                             weights_pls)
+            disc_error, gen_error, _, _ = sess.run(
+                [disc_loss, gen_loss, disc_train_op, gen_train_op],
+                feed_dict=feed)
+            disc_epoch_loss += disc_error
+            gen_epoch_loss += gen_error
+            epoch_steps += 1
+
+        print('Epoch {}'.format(epoch))
+        print('~~Discriminator loss: {}'.format(disc_epoch_loss/epoch_steps))
+        print('~~Generator     loss: {}'.format(gen_epoch_loss/epoch_steps))
+
+        # let's have a quick look
+        forgeries = sess.run(fake_embeddings)
+        # feel like should be able to ignore the placeholders, but apparently
+        # it throws its toys out if so.
+        # suggests something is wrong
+        feed[sequence_embedding] = forgeries
+        new_seqs = sess.run(generated_sequence, feed_dict=feed)
+        print(''.join([inv_vocab[step[0]] for step in new_seqs]))
 
 
 if __name__ == '__main__':

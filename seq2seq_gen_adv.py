@@ -167,7 +167,7 @@ def main(_):
     train_embedding = True
 
     batch_size = 64
-    embedding_size = 8  # very small
+    embedding_size = 32
 
     num_epochs = 5000
 
@@ -179,7 +179,7 @@ def main(_):
     max_sequence_length = 126
 
     num_layers = 1
-    layer_width = 512
+    layer_width = 128
 
     disc_shape = [100, 25]
 
@@ -286,18 +286,25 @@ def main(_):
 
     try:
         step = 0
+        running_avge = None
+        decay = 0.99
+        
         while not coord.should_stop():
             if train_embedding:
                 batch_error, _, last_batch, last_target = sess.run(
                     [reconstruction_error, unsup_train_op, generated_sequence,
                      data_batch])
+                if running_avge:
+                    running_avge -= (1-decay) * (running_avge - batch_error)
+                else:
+                    running_avge = batch_error
                 # have a look maybe?
                 if (step % 1000) == 0:
                     embedding_saver.save(
                         sess, embedding_model_path+'gru_encdec',
                         global_step=step, write_meta_graph=False)
                     print('Step {}, unsupervised reconstruction error: {}'.format(
-                        step, batch_error))
+                        step, running_avge))
                     test_index = np.random.randint(batch_size)
                     print(''.join([inv_vocab[step[test_index]]
                                    for step in last_target[:, ...]]))
@@ -308,8 +315,14 @@ def main(_):
                     #     bar.finish()
                     #     print('Happy with the embeddings because threshold.')
                     #     break
-                bar.update(step, loss=batch_error)
+                bar.update(step, loss=running_avge)
                 step += 1
+                if running_avge < 0.001:
+                    print('We are done')
+                    embedding_saver.save(
+                        sess, embedding_model_path+'gru_encdec',
+                        global_step=step, write_meta_graph=False)
+                    raise tf.OutOfRangeError('error low enough to stop')
             else:  # train the generative adversarial part
                 print('gen-adv training')
                 bar = progressbar.ProgressBar(

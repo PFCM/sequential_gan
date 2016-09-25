@@ -1,4 +1,5 @@
 """A better way? We will see"""
+import os
 import numpy as np
 import tensorflow as tf
 
@@ -50,7 +51,7 @@ def encoder(inputs, num_layers, width, sequence_lengths,
             the last element).
     """
     if embedding_matrix is None:
-        inputs = [tf.nn.one_hot(input_) for input_ in inputs]
+        inputs = [tf.one_hot(input_) for input_ in inputs]
 
     # not sure why this is necessary
     batch_size = inputs[0].get_shape()[0].value
@@ -132,7 +133,9 @@ def reconstruction_loss(sequence, target, weights):
     Returns:
         scalar tensor, the average loss.
     """
-    return tf.nn.seq2seq.sequence_loss(sequence, target, weights)
+    # return tf.nn.seq2seq.sequence_loss(sequence, target, weights)
+    return tf.reduce_mean(
+        tf.nn.seq2seq.sequence_loss_by_example(sequence, target, weights))
 
 
 def fill_feed(input_vars, input_data, length_var, lengths, weight_vars):
@@ -158,19 +161,25 @@ def main(_):
     # does something
     import string
     import progressbar
-    import data
+    import process_nips
+
+    embedding_model_path = 'models/seq2seq/'
+    train_embedding = True
 
     batch_size = 64
-    np_data, lengths, vocab = data.get_data()
+    embedding_size = 8  # very small
+
+    num_epochs = 5000
+
+    data_batch, length_batch = process_nips.get_nips_tensor(
+        batch_size, 126, 'Title', num_epochs)
+    vocab = process_nips.get_vocab()
     inv_vocab = {b: a for a, b in vocab.items()}
     vocab_size = len(vocab)
-    max_sequence_length = np.max(lengths)
-    embedding_size = 128
-
-    num_epochs = 1000
+    max_sequence_length = 126
 
     num_layers = 1
-    layer_width = 256
+    layer_width = 512
 
     disc_shape = [100, 25]
 
@@ -182,26 +191,30 @@ def main(_):
                                 shape=[vocab_size, embedding_size])
 
     # these are also the targets
-    input_pls = [tf.placeholder(
-        tf.int32, [batch_size], name='input_{}'.format(i))
-                 for i in range(max_sequence_length)]
+    # input_pls = [tf.placeholder(
+    #     tf.int32, [batch_size], name='input_{}'.format(i))
+    #              for i in range(max_sequence_length)]
     # actual input to the models will be this reversed
-    model_in = tf.unpack(tf.reverse(tf.pack(input_pls), [True, False]))
-    length_pl = tf.placeholder(tf.int32, [batch_size])
-    weights_pls = [tf.placeholder(
-        tf.float32, [batch_size], name='weight_{}'.format(i))
-                   for i in range(max_sequence_length)]
+    model_in = tf.unpack(tf.reverse(data_batch, [True, False]))
+    # the weights for the loss are slightly awkward
+    ranges = tf.pack([tf.range(max_sequence_length)] * batch_size)
+    ranges = tf.transpose(ranges, [1, 0])
+    weights = tf.select(ranges > length_batch,
+                        tf.zeros_like(data_batch, tf.float32),
+                        tf.ones_like(data_batch, tf.float32))
+    weights = tf.unpack(weights)
     print('\r{:\\^60}'.format('got data stuff'))
 
     print('{:~^60}'.format('getting model'), end='', flush=True)
     with tf.variable_scope('generative') as scope:
         sequence_embedding = encoder(model_in, num_layers, layer_width,
-                                     input_pls, embedding_matrix=embedding)
-        generated_logits = decoder(input_pls, sequence_embedding, num_layers,
-                                   layer_width, embedding, vocab_size)
+                                     length_batch, embedding_matrix=embedding)
+        generated_logits = decoder(
+            tf.unpack(data_batch), sequence_embedding, num_layers,
+            layer_width, embedding, vocab_size)
         generated_sequence = [tf.argmax(step, 1) for step in generated_logits]
-        reconstruction_error = reconstruction_loss(generated_logits, input_pls,
-                                                   weights_pls)
+        reconstruction_error = reconstruction_loss(
+            generated_logits, tf.unpack(data_batch), weights)
 
         unsup_opt = tf.train.AdamOptimizer(0.001)
         unsup_train_op = unsup_opt.minimize(
@@ -209,10 +222,12 @@ def main(_):
 
         # now get a feedforward generator which takes noise to a fake embedding
         fake_embeddings = generator(noise_var, gen_shape)
-        noise_width = noise_var.get_shape()[1].value
-        first_half = generator(sequence_embedding, gen_shape[::-1] + [noise_width], -len(gen_shape) - 1)
+
         scope.reuse_variables()
-        reproductions = generator(first_half, gen_shape)
+        fake_sequence = decoder(
+            tf.unpack(data_batch), fake_embeddings, num_layers, layer_width,
+            embedding, vocab_size)
+        fake_sequence = [tf.argmax(step, 1) for step in fake_sequence]
 
     with tf.variable_scope('discriminative') as scope:
         disc_real = discriminator(sequence_embedding, disc_shape)
@@ -224,15 +239,14 @@ def main(_):
 
         disc_opt = tf.train.AdamOptimizer(0.1)
         disc_train_op = disc_opt.minimize(
-            disc_loss, var_list=tf.get_collection('embedding'))
+            disc_loss, var_list=tf.get_collection('discriminator'))
 
     with tf.variable_scope('generative'):
         # the loss for the generator is how correct the discriminator was on
         # its batch.
         # (this could be the wrong way round, depends on class labels)
         gen_loss = -tf.reduce_mean(tf.log(1.0 - tf.nn.sigmoid(disc_fake)))
-        gen_loss += 10.0 * tf.reduce_mean(tf.squared_difference(sequence_embedding, reproductions))
-        gen_opt = tf.train.AdamOptimizer(0.00001)
+        gen_opt = tf.train.AdamOptimizer(0.01)
         gen_train_op = gen_opt.minimize(
             gen_loss, var_list=tf.get_collection('generator'))
 
@@ -240,8 +254,20 @@ def main(_):
 
     sess = tf.Session()
 
+    embedding_saver = tf.train.Saver(var_list=tf.get_collection('embedding'),
+                                     max_to_keep=1)
+
     print('{:~^60}'.format('initialising'), end='', flush=True)
     sess.run(tf.initialize_all_variables())
+    sess.run(tf.initialize_local_variables())
+
+    # check if we have an embedding model to start with
+    if os.path.exists(embedding_model_path):
+        model_path = tf.train.latest_checkpoint(embedding_model_path)
+        embedding_saver.restore(sess, model_path)
+    else:
+        os.makedirs(embedding_model_path)
+
     print('\r{:\\^60}'.format('initialised'))
 
     widgets = ['(ﾉ◕ヮ◕)ﾉ* ',
@@ -249,71 +275,60 @@ def main(_):
                progressbar.Bar(marker='/',
                                left='-',
                                fill='~'),
-               ' (', progressbar.AdaptiveETA(), ') ']
-
+               ' (', progressbar.DynamicMessage('loss'), ')'
+               ' (', progressbar.AdaptiveETA(), ')']
+    max_steps = (403 // batch_size) * num_epochs
     bar = progressbar.ProgressBar(widgets=widgets, redirect_stdout=True,
-                                  max_value=num_epochs)
-    for epoch in bar(range(num_epochs)):
-        epoch_loss = 0
-        epoch_steps = 0
-        for batch_data, batch_lengths in data.iterate_batches(np_data,
-                                                              lengths,
-                                                              batch_size):
-            feed = fill_feed(input_pls, batch_data, length_pl, batch_lengths,
-                             weights_pls)
-            batch_error, _ = sess.run([reconstruction_error, unsup_train_op],
-                                      feed_dict=feed)
-            epoch_loss += batch_error
-            epoch_steps += 1
-        # have a look maybe?
-        print('Epoch {}, unsupervised reconstruction error: {}'.format(
-            epoch+1, epoch_loss/epoch_steps))
-        last_batch = sess.run(generated_sequence, feed_dict=feed)
-        test_index = np.random.randint(batch_size)
-        print(''.join([inv_vocab[step[test_index]]
-                       for step in batch_data.T[:, ...]]))
-        print(' -->')
-        print(''.join([inv_vocab[step[test_index]]
-                       for step in last_batch]))
-        if (epoch_loss / epoch_steps) <= 0.1:
-            bar.finish()
-            print('Happy with the embeddings because threshold.')
-            break
+                                  max_value=max_steps)
+    print(max_steps)
+    coord = tf.train.Coordinator()
+    threads = tf.train.start_queue_runners(sess=sess, coord=coord)
 
-    print('Moving on to gen-adv training')
-    bar = progressbar.ProgressBar(widgets=widgets, redirect_stdout=True)
-    for epoch in bar(range(num_epochs * 10)):
-        disc_epoch_loss, gen_epoch_loss = 0, 0
-        epoch_steps = 0
-        for batch_data, batch_lengths in data.iterate_batches(np_data,
-                                                              lengths,
-                                                              batch_size):
-            feed = fill_feed(input_pls, batch_data, length_pl, batch_lengths,
-                             weights_pls)
-            if epoch_steps > 0 and gen_error/epoch_steps >= 0.1:
+    try:
+        step = 0
+        while not coord.should_stop():
+            if train_embedding:
+                batch_error, _, last_batch, last_target = sess.run(
+                    [reconstruction_error, unsup_train_op, generated_sequence,
+                     data_batch])
+                # have a look maybe?
+                if (step % 1000) == 0:
+                    embedding_saver.save(
+                        sess, embedding_model_path+'gru_encdec',
+                        global_step=step, write_meta_graph=False)
+                    print('Step {}, unsupervised reconstruction error: {}'.format(
+                        step, batch_error))
+                    test_index = np.random.randint(batch_size)
+                    print(''.join([inv_vocab[step[test_index]]
+                                   for step in last_target[:, ...]]))
+                    print(' -->')
+                    print(''.join([inv_vocab[step[test_index]]
+                                   for step in last_batch]))
+                    # if (epoch_loss / epoch_steps) <= 0.1:
+                    #     bar.finish()
+                    #     print('Happy with the embeddings because threshold.')
+                    #     break
+                bar.update(step, loss=batch_error)
+                step += 1
+            else:  # train the generative adversarial part
+                print('gen-adv training')
+                bar = progressbar.ProgressBar(
+                    widgets=widgets, redirect_stdout=True)
                 disc_error, gen_error, _, _ = sess.run(
-                    [disc_loss, gen_loss, disc_train_op, gen_train_op],
-                    feed_dict=feed)
-            else:
-                disc_error, gen_error, _ = sess.run(
-                    [disc_loss, gen_loss, disc_train_op],
-                    feed_dict=feed)
-            disc_epoch_loss += disc_error
-            gen_epoch_loss += gen_error
-            epoch_steps += 1
+                    [disc_loss, gen_loss, disc_train_op, gen_train_op])
 
-        print('Epoch {}'.format(epoch))
-        print('~~Discriminator loss: {}'.format(disc_epoch_loss/epoch_steps))
-        print('~~Generator     loss: {}'.format(gen_epoch_loss/epoch_steps))
-
-        # let's have a quick look
-        forgeries = sess.run(fake_embeddings)
-        # feel like should be able to ignore the placeholders, but apparently
-        # it throws its toys out if so.
-        # suggests something is wrong
-        feed[sequence_embedding] = forgeries
-        new_seqs = sess.run(generated_sequence, feed_dict=feed)
-        print(''.join([inv_vocab[step[0]] for step in new_seqs]))
+                if (step % 250) == 1:
+                    print('Step {}'.format(step))
+                    print('~~Discriminator loss: {}'.format(disc_error))
+                    print('~~Generator     loss: {}'.format(gen_error))
+                    new_seqs = sess.run(fake_sequence)
+                    print(''.join([inv_vocab[step[0]] for step in new_seqs]))
+    except tf.errors.OutOfRangeError:
+        print('Out of data now')
+    finally:
+        coord.request_stop()
+    coord.join(threads)
+    sess.close()
 
 
 if __name__ == '__main__':

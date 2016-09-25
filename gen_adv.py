@@ -20,6 +20,7 @@ import tensorflow as tf
 
 import data
 
+import mrnn
 
 class new_collection(object):
     """decorator that runs a function and adds any variables it adds to

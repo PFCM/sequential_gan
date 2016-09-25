@@ -218,7 +218,7 @@ def main(_):
 
         unsup_opt = tf.train.AdamOptimizer(0.001)
         unsup_train_op = unsup_opt.minimize(
-            reconstruction_error, var_list=tf.get_collection('embedding'))
+            reconstruction_error, var_list=tf.get_collection('embedding') + [embedding])
 
         # now get a feedforward generator which takes noise to a fake embedding
         fake_embeddings = generator(noise_var, gen_shape)
@@ -254,7 +254,7 @@ def main(_):
 
     sess = tf.Session()
 
-    embedding_saver = tf.train.Saver(var_list=tf.get_collection('embedding'),
+    embedding_saver = tf.train.Saver(var_list=tf.get_collection('embedding') + [embedding],
                                      max_to_keep=1)
 
     print('{:~^60}'.format('initialising'), end='', flush=True)

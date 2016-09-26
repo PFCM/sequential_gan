@@ -22,7 +22,7 @@ def generator(inputs, shape, start_number=0):
     for i, layer in enumerate(shape):
         inputs = gen_adv._ff_layer(inputs, layer,
                                       'generator-{}'.format(i + start_number))
-        if i != len(shape) - 1:
+        if i != (len(shape) - 1):
             inputs = tf.nn.relu(inputs)
 
     return inputs
@@ -164,12 +164,12 @@ def main(_):
     import process_nips
 
     embedding_model_path = 'models/seq2seq/'
-    train_embedding = True
+    train_embedding = False
 
     batch_size = 64
     embedding_size = 32
 
-    num_epochs = 5000
+    num_epochs = 50000
 
     data_batch, length_batch = process_nips.get_nips_tensor(
         batch_size, 126, 'Title', num_epochs)
@@ -179,12 +179,12 @@ def main(_):
     max_sequence_length = 126
 
     num_layers = 1
-    layer_width = 128
+    layer_width = 512
 
-    disc_shape = [100, 25]
+    disc_shape = [256, 256]
 
-    gen_shape = [100, layer_width]
-    noise_var = tf.random_normal([batch_size, 64])
+    gen_shape = [256, layer_width]
+    noise_var = tf.random_normal([batch_size, 128])
 
     print('{:~^60}'.format('getting data stuff'), end='', flush=True)
     embedding = tf.get_variable('embedding',
@@ -237,7 +237,7 @@ def main(_):
 
         disc_loss = gen_adv.discriminator_loss(disc_fake, disc_real)
 
-        disc_opt = tf.train.AdamOptimizer(0.1)
+        disc_opt = tf.train.AdamOptimizer(0.00001)
         disc_train_op = disc_opt.minimize(
             disc_loss, var_list=tf.get_collection('discriminator'))
 
@@ -245,8 +245,8 @@ def main(_):
         # the loss for the generator is how correct the discriminator was on
         # its batch.
         # (this could be the wrong way round, depends on class labels)
-        gen_loss = -tf.reduce_mean(tf.log(1.0 - tf.nn.sigmoid(disc_fake)))
-        gen_opt = tf.train.AdamOptimizer(0.01)
+        gen_loss = -tf.reduce_mean(tf.log(tf.sigmoid(-disc_fake)))
+        gen_opt = tf.train.AdamOptimizer(0.0001)
         gen_train_op = gen_opt.minimize(
             gen_loss, var_list=tf.get_collection('generator'))
 
@@ -275,7 +275,8 @@ def main(_):
                progressbar.Bar(marker='/',
                                left='-',
                                fill='~'),
-               ' (', progressbar.DynamicMessage('loss'), ')'
+               ' (', progressbar.DynamicMessage('loss_g'), ')'
+               ' (', progressbar.DynamicMessage('loss_d'), ')'
                ' (', progressbar.AdaptiveETA(), ')']
     max_steps = (403 // batch_size) * num_epochs
     bar = progressbar.ProgressBar(widgets=widgets, redirect_stdout=True,
@@ -315,7 +316,7 @@ def main(_):
                     #     bar.finish()
                     #     print('Happy with the embeddings because threshold.')
                     #     break
-                bar.update(step, loss=running_avge)
+                bar.update(step, loss_g=running_avge, loss_d=running_avge)
                 step += 1
                 if running_avge < 0.001:
                     print('We are done')
@@ -324,9 +325,7 @@ def main(_):
                         global_step=step, write_meta_graph=False)
                     raise tf.OutOfRangeError('error low enough to stop')
             else:  # train the generative adversarial part
-                print('gen-adv training')
-                bar = progressbar.ProgressBar(
-                    widgets=widgets, redirect_stdout=True)
+                #print('gen-adv training')
                 disc_error, gen_error, _, _ = sess.run(
                     [disc_loss, gen_loss, disc_train_op, gen_train_op])
 
@@ -336,6 +335,8 @@ def main(_):
                     print('~~Generator     loss: {}'.format(gen_error))
                     new_seqs = sess.run(fake_sequence)
                     print(''.join([inv_vocab[step[0]] for step in new_seqs]))
+                bar.update(step, loss_d=disc_error, loss_g=gen_error)
+                step += 1
     except tf.errors.OutOfRangeError:
         print('Out of data now')
     finally:
